@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "goland": {
+      "url": "http://127.0.0.1:12345/sse",
+      "timeout": 60
+    },
+    "fetch": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["mcp-server-fetch"]
+    },
+    "notes": {
+      "type": "stdio",
+      "command": "/opt/maple/bin/maple",
+      "args": [
+        "run",
+        "notes"
+      ]
+    }
+  }
+}

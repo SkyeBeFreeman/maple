@@ -1,0 +1,23 @@
+{
+  "mcpServers": {
+    "remote-http": {
+      "type": "http",
+      "url": "https://mcp.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${EXAMPLE_TOKEN}"
+      }
+    },
+    "remote-sse": {
+      "type": "sse",
+      "url": "https://mcp.example.com/sse"
+    },
+    "local": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "example-mcp"],
+      "env": {
+        "EXAMPLE_KEY": "${EXAMPLE_KEY}"
+      }
+    }
+  }
+}

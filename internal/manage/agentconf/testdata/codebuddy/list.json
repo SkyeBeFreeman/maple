@@ -1,0 +1,37 @@
+{
+  "mcpServers": {
+    "remote-a": {
+      "url": "https://mcp.example.com/a/mcp",
+      "headers": {
+        "Authorization": "Bearer ${A_TOKEN}"
+      },
+      "timeout": 60000,
+      "transportType": "streamable-http"
+    },
+    "remote-b": {
+      "url": "https://mcp.example.com/b/mcp",
+      "headers": {
+        "X-Api-Key": "${B_KEY}"
+      },
+      "timeout": 30000
+    },
+    "local": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "example-mcp"],
+      "env": {
+        "EXAMPLE_KEY": "${EXAMPLE_KEY}"
+      },
+      "disabled": false,
+      "autoApprove": []
+    },
+    "remote-c": {
+      "type": "streamableHttp",
+      "url": "https://mcp.example.com/c/mcp",
+      "description": "example"
+    },
+    "remote-d": {
+      "url": "https://mcp.example.com/d/sse"
+    }
+  }
+}

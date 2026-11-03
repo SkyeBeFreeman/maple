@@ -1,0 +1,21 @@
+{
+  "numStartups": 12,
+  "theme": "dark",
+  "tipsHistory": {
+    "caf\u00e9": 3,
+    "a & <b>": 1
+  },
+  "mcpServers": {
+    "goland": {
+      "type": "sse",
+      "url": "http://127.0.0.1:12345/sse"
+    }
+  },
+  "autoUpdates": false,
+  "projects": {
+    "/Users/example/project": {
+      "allowedTools": [],
+      "mcpServers": {}
+    }
+  }
+}
