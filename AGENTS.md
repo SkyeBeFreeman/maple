@@ -55,14 +55,29 @@ LICENSE
 
 ## 构建与测试
 
-代码落地前的预定命令，落地后按实际补充：
+只支持 macOS。构建需要 cgo（Keychain 通过 cgo 调用 Security 框架），保持 `CGO_ENABLED=1`（默认值）并装好 Xcode Command Line Tools。
+
+golangci-lint 用 v2.11.4，装在仓库内的 `.bin/`（已 gitignore），不替换全局版本：
 
 ```bash
-go build ./...          # 编译检查
-go test -race ./...     # 单元测试；网关的并发和子进程管理多，默认带 -race
-golangci-lint fmt       # 格式化并写回（gofmt、gci）
-golangci-lint run       # 静态检查，配置见 .golangci.yml（golangci-lint v2）
-go mod tidy             # 整理依赖；go mod tidy -diff 只读自查
+GOBIN=$PWD/.bin go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.4
+```
+
+日常命令：
+
+```bash
+go build ./...                # 编译检查
+go test -race ./...           # 单元测试；网关的并发和子进程管理多，默认带 -race
+./.bin/golangci-lint fmt      # 格式化并写回（gofmt、gci）
+./.bin/golangci-lint run      # 静态检查，配置见 .golangci.yml
+go mod tidy                   # 整理依赖；go mod tidy -diff 只读自查
+```
+
+以下两个测试默认跳过，需显式开启；它们会读写真实系统（登录钥匙串、当前用户的 launchd），只在需要验证平台层时手动运行：
+
+```bash
+MAPLE_TEST_KEYCHAIN=1 go test ./internal/platform/keychain/ -run Darwin     # 真实 Keychain
+MAPLE_TEST_LAUNCHD=1 go test ./internal/platform/launchd/ -run LoadUnload   # 真实 launchd
 ```
 
 ## 代码风格
