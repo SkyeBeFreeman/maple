@@ -90,6 +90,11 @@ func TestValidateRules(t *testing.T) {
 			line: 5, server: "ok", msgMatch: "${",
 		},
 		{
+			name: "reserved name",
+			yaml: "servers:\n  maple:\n    url: https://x\n",
+			line: 2, server: "maple", msgMatch: `server name "maple" is reserved`,
+		},
+		{
 			name: "port 0",
 			yaml: "port: 0\nservers: {}\n",
 			line: 1, server: "", msgMatch: "port",

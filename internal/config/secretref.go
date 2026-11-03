@@ -10,6 +10,9 @@ import (
 
 var secretNameRe = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 
+// IsSecretName reports whether name may be stored and referenced as ${name}.
+func IsSecretName(name string) bool { return secretNameRe.MatchString(name) }
+
 // SecretError reports that the value of a referenced secret could not be
 // obtained.
 type SecretError struct {

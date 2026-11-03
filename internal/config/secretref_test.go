@@ -165,3 +165,17 @@ func TestUnterminatedRefDoesNotEchoValue(t *testing.T) {
 		t.Errorf("Refs err = %v, want an error that omits the value", err)
 	}
 }
+
+func TestIsSecretName(t *testing.T) {
+	for _, ok := range []string{"A", "_X", "DEMO_TOKEN_2"} {
+		if !IsSecretName(ok) {
+			t.Errorf("IsSecretName(%q) = false, want true", ok)
+		}
+	}
+	// "A}${B" would slip through a check built on Refs("${"+name+"}").
+	for _, bad := range []string{"", "a", "1X", "A-B", "A}${B", "A B"} {
+		if IsSecretName(bad) {
+			t.Errorf("IsSecretName(%q) = true, want false", bad)
+		}
+	}
+}

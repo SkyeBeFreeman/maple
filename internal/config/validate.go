@@ -29,6 +29,10 @@ func (e *ValidationError) Error() string {
 // limit.
 var serverNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
 
+// reservedName is the gateway's own entry in the agents' configs; a direct
+// server with this name would collide with it.
+const reservedName = "maple"
+
 // Validate checks the rules of spec 6.2 and returns the first violation as a
 // *ValidationError.
 func (c *Config) Validate() error { return validate(c, nil) }
@@ -56,6 +60,9 @@ func validateServer(name string, s *Server, idx *nodeIndex) error {
 	}
 	if !serverNameRe.MatchString(name) {
 		return fail(idx.serverLine(name), "invalid server name: use 1-32 characters from A-Z a-z 0-9 _ -")
+	}
+	if name == reservedName {
+		return fail(idx.serverLine(name), "server name %q is reserved; choose another name", reservedName)
 	}
 	if s == nil {
 		s = &Server{}
