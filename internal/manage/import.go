@@ -37,13 +37,14 @@ type ImportOptions struct {
 // keys as ImportOptions.Rename. Conflicts warns about names whose content
 // differs between agents; Skipped maps names that cannot be imported to why.
 type ImportResult struct {
-	Candidates             []agentconf.Foreign
-	Imported, SkippedOAuth []string
-	SecretNames            map[string]string
-	Backup                 string
-	Conflicts              []string
-	Skipped                map[string]string
-	Change                 *ChangeResult
+	Candidates   []agentconf.Foreign `json:"candidates"`
+	Imported     []string            `json:"imported"`
+	SkippedOAuth []string            `json:"skipped_oauth"`
+	SecretNames  map[string]string   `json:"secret_names"`
+	Backup       string              `json:"backup,omitempty"`
+	Conflicts    []string            `json:"conflicts"`
+	Skipped      map[string]string   `json:"skipped"`
+	Change       *ChangeResult       `json:"change,omitempty"`
 }
 
 type candidate struct {

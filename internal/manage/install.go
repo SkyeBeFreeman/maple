@@ -49,8 +49,8 @@ type InstallOptions struct {
 // InstallResult lists the files Install created or changed and what it did to
 // each agent.
 type InstallResult struct {
-	Created []string
-	Agents  []agentconf.Result
+	Created []string           `json:"created"`
+	Agents  []agentconf.Result `json:"agents"`
 }
 
 // Install sets maple up; every step only fills in what is missing, so it is

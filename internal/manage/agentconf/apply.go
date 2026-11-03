@@ -56,16 +56,18 @@ type ApplyOptions struct {
 
 // Result describes what Apply did to one agent's file.
 type Result struct {
-	Agent, Path string
-	Missing     bool
-	Written     []string
-	Removed     []string
-	Skipped     []Skip
+	Agent   string   `json:"agent"`
+	Path    string   `json:"path"`
+	Missing bool     `json:"missing"`
+	Written []string `json:"written"`
+	Removed []string `json:"removed"`
+	Skipped []Skip   `json:"skipped"`
 }
 
 // Skip is an entry Apply left alone, with the reason shown to the user.
 type Skip struct {
-	Name, Reason string
+	Name   string `json:"name"`
+	Reason string `json:"reason"`
 }
 
 // Apply writes desired into each agent's file, touching only entries recorded

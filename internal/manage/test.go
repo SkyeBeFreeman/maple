@@ -18,9 +18,9 @@ const testTimeout = 10 * time.Second
 
 // TestResult is what `maple mcp test` reports.
 type TestResult struct {
-	Server       string
-	Tools        []string
-	Instructions string
+	Server       string   `json:"server"`
+	Tools        []string `json:"tools"`
+	Instructions string   `json:"instructions,omitempty"`
 }
 
 // Test connects to a server directly, bypassing the gateway, the same way the

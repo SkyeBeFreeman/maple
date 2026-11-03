@@ -19,10 +19,10 @@ import (
 
 // Check is one line of `maple doctor`. Fix is set when OK is false.
 type Check struct {
-	Name   string
-	OK     bool
-	Detail string
-	Fix    string
+	Name   string `json:"name"`
+	OK     bool   `json:"ok"`
+	Detail string `json:"detail"`
+	Fix    string `json:"fix,omitempty"`
 }
 
 const (

@@ -16,9 +16,9 @@ import (
 // when the agents' files did not need to change. Reloaded tells whether the
 // running gateway picked the change up; Note explains why not.
 type ChangeResult struct {
-	Agents   []agentconf.Result
-	Reloaded bool
-	Note     string
+	Agents   []agentconf.Result `json:"agents"`
+	Reloaded bool               `json:"reloaded"`
+	Note     string             `json:"note,omitempty"`
 }
 
 // Add adds a new server.
