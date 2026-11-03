@@ -215,3 +215,28 @@ func TestImportReportsAgentFailureAfterSave(t *testing.T) {
 		t.Error("original kept")
 	}
 }
+
+// Two imports within the same second must not share a backup directory: the
+// second would overwrite the only copy of the original entries.
+func TestImportBackupsAreDistinct(t *testing.T) {
+	e := importEnv(t)
+	original := readFile(t, e.Paths.CodeBuddyJSON())
+	first, err := Import(context.Background(), e, ImportOptions{Names: []string{"local"}, RemoveOriginals: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterFirst := readFile(t, e.Paths.CodeBuddyJSON())
+	second, err := Import(context.Background(), e, ImportOptions{Names: []string{"remote"}, RemoveOriginals: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Backup == "" || first.Backup == second.Backup {
+		t.Fatalf("backups %q and %q, want two distinct directories", first.Backup, second.Backup)
+	}
+	if got := readFile(t, filepath.Join(first.Backup, "codebuddy-mcp.json")); got != original {
+		t.Error("first backup lost the original content")
+	}
+	if got := readFile(t, filepath.Join(second.Backup, "codebuddy-mcp.json")); got != afterFirst {
+		t.Error("second backup differs from the file it replaced")
+	}
+}

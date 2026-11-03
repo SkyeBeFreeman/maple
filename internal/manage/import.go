@@ -407,7 +407,7 @@ func doProbe(ctx context.Context, method, url string, headers map[string]string,
 // removeOriginals backs up every agent file before deleting the imported
 // entries from the agents that had them.
 func removeOriginals(e Env, names []string, cands map[string]*candidate, res *ImportResult) error {
-	dir := filepath.Join(e.Paths.BackupDir(), time.Now().Format("20060102-150405"))
+	var dir string
 	byAgent := map[string][]string{}
 	for _, name := range names {
 		for _, a := range cands[name].agents {
@@ -422,10 +422,17 @@ func removeOriginals(e Env, names []string, cands map[string]*candidate, res *Im
 		if err != nil {
 			return err
 		}
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return err
+		if dir == "" {
+			if err := os.MkdirAll(e.Paths.BackupDir(), 0o700); err != nil {
+				return err
+			}
+			// Unique per run: a timestamp alone repeats within a second, and
+			// a second import would overwrite the only copy of the originals.
+			if dir, err = os.MkdirTemp(e.Paths.BackupDir(), time.Now().Format("20060102-150405")+"-*"); err != nil {
+				return err
+			}
 		}
-		if err := os.WriteFile(filepath.Join(dir, a.ID()+"-"+filepath.Base(a.Path(e.Paths))), data, 0o600); err != nil {
+		if err := writeNew(filepath.Join(dir, a.ID()+"-"+filepath.Base(a.Path(e.Paths))), data); err != nil {
 			return fmt.Errorf("back up %s: %w", a.Path(e.Paths), err)
 		}
 	}
@@ -442,4 +449,17 @@ func removeOriginals(e Env, names []string, cands map[string]*candidate, res *Im
 		return fmt.Errorf("servers imported, but removing the originals failed (backup in %s): %w", dir, err)
 	}
 	return nil
+}
+
+// writeNew refuses to replace an existing file, so a backup is never lost.
+func writeNew(path string, data []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }

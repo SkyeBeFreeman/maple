@@ -65,6 +65,19 @@ func TestInstallIdempotent(t *testing.T) {
 	if readFile(t, e.Paths.Config()) != cfgBefore {
 		t.Error("config rewritten")
 	}
+	// An ignored --port must be said, not silently dropped.
+	if !strings.Contains(res.Note, "port "+strconv.Itoa(port)+" unchanged") || !strings.Contains(res.Note, "maple sync") {
+		t.Errorf("Note = %q", res.Note)
+	}
+	for _, p := range []int{0, port} {
+		res, err = Install(ctx, e, InstallOptions{Port: p, NoLaunchd: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Note != "" {
+			t.Errorf("--port %d: Note = %q, want none", p, res.Note)
+		}
+	}
 	if tok2, _ := config.LoadToken(e.Paths); tok2 != tok {
 		t.Error("token regenerated")
 	}

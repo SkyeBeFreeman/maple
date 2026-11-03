@@ -51,6 +51,7 @@ type InstallOptions struct {
 type InstallResult struct {
 	Created []string           `json:"created"`
 	Agents  []agentconf.Result `json:"agents"`
+	Note    string             `json:"note,omitempty"`
 }
 
 // Install sets maple up; every step only fills in what is missing, so it is
@@ -110,6 +111,15 @@ func installState(ctx context.Context, e Env, o InstallOptions, res *InstallResu
 		res.Created = append(res.Created, e.Paths.Config())
 	case err != nil:
 		return err
+	case o.Port != 0:
+		raw, err := os.ReadFile(e.Paths.Config())
+		if err != nil {
+			return err
+		}
+		// Rewriting the user's config here would drop their comments.
+		if cur := config.PeekPort(raw); cur != o.Port {
+			res.Note = fmt.Sprintf("config.yaml already exists; port %d unchanged (--port %d ignored); edit port in %s and run: maple sync", cur, o.Port, e.Paths.Config())
+		}
 	}
 	_, created, err := config.EnsureToken(e.Paths)
 	if err != nil {

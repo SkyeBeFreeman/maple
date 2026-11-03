@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -44,12 +46,14 @@ func newEnv() (manage.Env, error) {
 		return manage.Env{}, err
 	}
 	p := config.Paths{Home: home}
-	return manage.Env{Paths: p, Keychain: newKeychain(p), MapleBin: bin, Shell: os.Getenv("SHELL")}, nil
+	return manage.Env{Paths: p, Keychain: newKeychain(p, os.Stderr), MapleBin: bin, Shell: os.Getenv("SHELL")}, nil
 }
 
 // MAPLE_KEYCHAIN=file lets the end-to-end test run without the real Keychain.
-func newKeychain(p config.Paths) keychain.Store {
+// It is loud because a user who sets it by mistake keeps secrets in plaintext.
+func newKeychain(p config.Paths, stderr io.Writer) keychain.Store {
 	if os.Getenv("MAPLE_KEYCHAIN") == "file" {
+		_, _ = fmt.Fprintln(stderr, "warning: MAPLE_KEYCHAIN=file stores secrets in plaintext; for tests only")
 		return keychain.NewFile(filepath.Join(p.MapleDir(), "test-secrets.json"))
 	}
 	return keychain.New("maple")

@@ -42,10 +42,18 @@ type Options struct {
 	// Logger replaces the gateway.log logger, e.g. in tests. Records still
 	// pass through the Redactor first.
 	Logger *slog.Logger
+	// Port is the port the listener was opened on for config.yaml. A loaded
+	// config naming another port makes Serve return ErrPortChanged; zero
+	// skips the check, for listeners on a random port.
+	Port int
 }
 
+// ErrPortChanged is returned by Serve when config.yaml names a port other
+// than Options.Port. The caller exits so launchd restarts it on that port.
+var ErrPortChanged = errors.New("config.yaml names a new port; restarting the gateway on it")
+
 // DefaultOptions returns the spec values: 40s list wait, 5s initialize wait
-// and a 200ms debounce. Version and Shell are left to the caller.
+// and a 200ms debounce. Version, Shell and Port are left to the caller.
 func DefaultOptions() Options {
 	return Options{
 		Pool:     pool.DefaultOptions(),
@@ -84,6 +92,9 @@ type Gateway struct {
 	tools     map[string]exposed
 	logs      map[string]*redactWriter
 	logFile   io.Closer // gateway.log, nil with Options.Logger
+	// portChanged is closed once a valid config names another port.
+	portChanged   chan struct{}
+	portSignalled bool
 
 	progMu   sync.Mutex
 	progSeq  uint64
@@ -105,6 +116,8 @@ func New(p config.Paths, kc keychain.Store, opts Options) *Gateway {
 		tools:    map[string]exposed{},
 		logs:     map[string]*redactWriter{},
 		progress: map[string]chan *mcp.ProgressNotificationParams{},
+
+		portChanged: make(chan struct{}),
 	}
 	g.bg, g.cancelBg = context.WithCancel(context.Background())
 	var h slog.Handler
@@ -174,6 +187,8 @@ func (g *Gateway) Serve(ctx context.Context, ln net.Listener) error {
 	case <-ctx.Done():
 	case err := <-serveErr:
 		result = err
+	case <-g.portChanged:
+		result = ErrPortChanged
 	}
 
 	// No graceful drain: agents keep an SSE stream open, so it would always

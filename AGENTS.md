@@ -80,6 +80,8 @@ MAPLE_TEST_KEYCHAIN=1 go test ./internal/platform/keychain/ -run Darwin     # �
 MAPLE_TEST_LAUNCHD=1 go test ./internal/platform/launchd/ -run LoadUnload   # 真实 launchd
 ```
 
+注意：带 `MAPLE_TEST_LAUNCHD=1` 跑 `go test ./...` 时，`internal/manage` 的 install 测试也会驱动真实的 launchctl，所以只对上面的单个包开启它。
+
 ## 代码风格
 
 - 由 golangci-lint（`.golangci.yml`）强制执行。`gci` 的 import 分组：标准库 → 第三方 → 本项目（`github.com/SkyeBeFreeman/maple/...`）。
@@ -92,7 +94,7 @@ MAPLE_TEST_LAUNCHD=1 go test ./internal/platform/launchd/ -run LoadUnload   # �
 ## 提交前检查清单
 
 - `go build ./...` 与 `go test -race ./...` 通过
-- `golangci-lint fmt` 之后 `golangci-lint run` 无新增问题
+- `./.bin/golangci-lint fmt` 之后 `./.bin/golangci-lint run` 无新增问题
 - `go mod tidy -diff` 无输出
 - 改动用户可见的行为时，`README.md` 与 `README-en.md` 已同步
 - diff 里没有本机路径、内部域名或密钥

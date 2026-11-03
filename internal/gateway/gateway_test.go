@@ -88,12 +88,22 @@ func testOptions() Options {
 
 func (e *env) start() {
 	e.t.Helper()
+	e.startOn(listen(e.t), testOptions())
+}
+
+func listen(t *testing.T) net.Listener {
+	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		e.t.Fatal(err)
+		t.Fatal(err)
 	}
+	return ln
+}
+
+func (e *env) startOn(ln net.Listener, opts Options) {
+	e.t.Helper()
 	e.url = "http://" + ln.Addr().String()
-	gw := New(e.paths, e.kc, testOptions())
+	gw := New(e.paths, e.kc, opts)
 	ctx, cancel := context.WithCancel(context.Background())
 	e.cancel = cancel
 	done := make(chan error, 1)
@@ -608,5 +618,40 @@ func TestStatus(t *testing.T) {
 	}
 	if s := got["off"]; s.State != config.StateStopped || s.Tools != 0 {
 		t.Fatalf("off status %+v", s)
+	}
+}
+
+func TestPortChangeStopsServe(t *testing.T) {
+	e := newEnv(t)
+	ln := listen(t)
+	opts := testOptions()
+	opts.Port = ln.Addr().(*net.TCPAddr).Port
+	e.writeConfig(fmt.Sprintf("port: %d\nservers:\n  fake:\n%s", opts.Port, e.fake("", "")))
+	e.startOn(ln, opts)
+	cs := e.connect(nil)
+	if toolNames(t, cs)["fake__echo"] == nil {
+		t.Fatal("fake__echo missing")
+	}
+	if len(e.pids()) == 0 {
+		t.Fatal("no upstream started")
+	}
+
+	other := opts.Port + 1
+	if other > 65535 {
+		other = opts.Port - 1
+	}
+	e.writeConfig(fmt.Sprintf("port: %d\nservers:\n  fake:\n%s", other, e.fake("", "")))
+	select {
+	case err := <-e.done:
+		e.cancel()
+		e.cancel = nil
+		if !errors.Is(err, ErrPortChanged) {
+			t.Fatalf("Serve = %v, want ErrPortChanged", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve kept running after the port changed")
+	}
+	for _, pid := range e.pids() {
+		waitGone(t, pid, 5*time.Second)
 	}
 }

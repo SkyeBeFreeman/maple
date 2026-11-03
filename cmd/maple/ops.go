@@ -32,6 +32,9 @@ func newInstallCmd() *cobra.Command {
 				}
 				printAgents(w, res.Agents)
 				fmt.Fprintln(w, "maple is installed; restart your agents to pick it up.")
+				if res.Note != "" {
+					fmt.Fprintf(w, "note: %s\n", res.Note)
+				}
 			})
 		},
 	}
@@ -154,9 +157,17 @@ func newSyncCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			note := manage.SyncNote(cmd.Context(), e)
+			if note != "" && asJSON(cmd) {
+				// stderr keeps the JSON array on stdout unchanged.
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "note: %s\n", note)
+			}
 			return emit(cmd, res, func(w *strings.Builder) {
 				printAgents(w, res)
 				fmt.Fprintln(w, "agent configs are in sync.")
+				if note != "" {
+					fmt.Fprintf(w, "note: %s\n", note)
+				}
 			})
 		},
 	}

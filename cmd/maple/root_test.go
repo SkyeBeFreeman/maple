@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/SkyeBeFreeman/maple/internal/config"
 )
 
 func TestRootVersion(t *testing.T) {
@@ -31,5 +33,20 @@ func TestRootJSONFlag(t *testing.T) {
 	}
 	if f.Value.Type() != "bool" || f.DefValue != "false" {
 		t.Fatalf("--json: type = %q, default = %q; want bool, false", f.Value.Type(), f.DefValue)
+	}
+}
+
+func TestFileKeychainWarns(t *testing.T) {
+	p := config.Paths{Home: t.TempDir()}
+	var errOut bytes.Buffer
+	t.Setenv("MAPLE_KEYCHAIN", "")
+	newKeychain(p, &errOut)
+	if errOut.Len() != 0 {
+		t.Errorf("real keychain warned: %q", errOut.String())
+	}
+	t.Setenv("MAPLE_KEYCHAIN", "file")
+	newKeychain(p, &errOut)
+	if got := errOut.String(); got != "warning: MAPLE_KEYCHAIN=file stores secrets in plaintext; for tests only\n" {
+		t.Errorf("warning = %q", got)
 	}
 }

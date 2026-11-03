@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -63,6 +64,18 @@ func (g *Gateway) reload() {
 		g.reloadErr = "config.yaml: " + g.red.Redact(err.Error())
 		g.mu.Unlock()
 		g.log.Warn("config rejected, keeping the previous one", "err", g.reloadErr)
+		return
+	}
+	if g.opts.Port != 0 && cfg.Port != g.opts.Port {
+		// Agents are being pointed at the new port, so staying on the old
+		// one would strand them. Not applied: the restart loads it anew.
+		g.reloadErr = fmt.Sprintf("config.yaml: port changed from %d to %d; the gateway restarts on the new port", g.opts.Port, cfg.Port)
+		if !g.portSignalled {
+			g.portSignalled = true
+			close(g.portChanged)
+		}
+		g.mu.Unlock()
+		g.log.Warn("port changed, stopping so launchd restarts the gateway", "from", g.opts.Port, "to", cfg.Port)
 		return
 	}
 	old := g.cfg
