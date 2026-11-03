@@ -1,0 +1,18 @@
+# Codex settings (sample)
+model = "example-model"
+approval_policy = "on-request"
+
+[mcp_servers.node_repl]
+command = "node"   # inline comment stays
+args = ["repl.js", "--port", "0"]
+
+[mcp_servers.node_repl.env]
+NODE_ENV = "development"
+
+# profile for experiments
+[profiles.x]
+model = "other-model"
+
+[mcp_servers.maple]
+url = "http://127.0.0.1:47321/mcp"
+http_headers = { Authorization = "Bearer test-token" }

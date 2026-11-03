@@ -41,5 +41,5 @@ type Agent interface {
 
 // All returns every supported agent in display order.
 func All() []Agent {
-	return []Agent{Claude, CodeBuddy}
+	return []Agent{Claude, Codex, CodeBuddy}
 }

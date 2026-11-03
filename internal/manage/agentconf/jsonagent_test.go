@@ -362,7 +362,7 @@ func TestAll(t *testing.T) {
 	for _, a := range All() {
 		ids = append(ids, a.ID())
 	}
-	if want := []string{"claude", "codebuddy"}; !reflect.DeepEqual(ids, want) {
+	if want := []string{"claude", "codex", "codebuddy"}; !reflect.DeepEqual(ids, want) {
 		t.Errorf("All() IDs = %v, want %v", ids, want)
 	}
 }

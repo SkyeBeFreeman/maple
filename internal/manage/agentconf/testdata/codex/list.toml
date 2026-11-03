@@ -1,0 +1,14 @@
+[mcp_servers.node_repl]
+command = "node"
+args = ["repl.js"]
+env = { NODE_ENV = "development" }
+env_vars = ["HOME"]
+
+[mcp_servers.remote-a]
+url = "https://mcp.example.com/a/mcp"
+http_headers = { "X-Client" = "sample" }
+bearer_token_env_var = "A_TOKEN"
+
+[mcp_servers.remote-b]
+url = "https://mcp.example.com/b/mcp"
+env_http_headers = { "X-Api-Key" = "B_KEY" }

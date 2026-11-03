@@ -1,0 +1,11 @@
+# top comment
+[mcp_servers.maple]
+url = "http://127.0.0.1:47321/mcp"
+http_headers = { Authorization = "Bearer test-token" }
+
+[mcp_servers.node_repl]
+command = "node"
+
+# trailing comment
+[profiles.x]
+model = "other-model"

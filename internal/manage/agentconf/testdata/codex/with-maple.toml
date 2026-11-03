@@ -1,0 +1,17 @@
+# top comment
+[mcp_servers.maple]   # managed by maple
+url = "http://127.0.0.1:1/mcp"
+http_headers = { Authorization = "Bearer old" }
+
+[mcp_servers.maple.env]
+OLD = "1"
+
+[mcp_servers.node_repl]
+command = "node"
+
+[mcp_servers."maple".extra]
+k = "v"
+
+# trailing comment
+[profiles.x]
+model = "other-model"
