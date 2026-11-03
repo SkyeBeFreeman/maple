@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/keybase/go-keychain v0.0.1
 	github.com/spf13/cobra v1.10.2
+	go.yaml.in/yaml/v3 v3.0.6
 )
 
 require (
