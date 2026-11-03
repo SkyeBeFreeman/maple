@@ -165,3 +165,11 @@ func TestValidateWithoutNodes(t *testing.T) {
 		t.Fatalf("Validate: %v", err)
 	}
 }
+
+func TestIsServerName(t *testing.T) {
+	for name, want := range map[string]bool{"ok_1-x": true, "a.b": false, "maple": false, "": false} {
+		if got := IsServerName(name); got != want {
+			t.Errorf("IsServerName(%q) = %v", name, got)
+		}
+	}
+}

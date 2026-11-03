@@ -33,6 +33,9 @@ var serverNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
 // server with this name would collide with it.
 const reservedName = "maple"
 
+// IsServerName reports whether name is allowed as a server name.
+func IsServerName(name string) bool { return serverNameRe.MatchString(name) && name != reservedName }
+
 // Validate checks the rules of spec 6.2 and returns the first violation as a
 // *ValidationError.
 func (c *Config) Validate() error { return validate(c, nil) }

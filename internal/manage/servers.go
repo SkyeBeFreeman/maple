@@ -23,7 +23,7 @@ type ChangeResult struct {
 
 // Add adds a new server.
 func Add(ctx context.Context, e Env, name string, s *config.Server) (*ChangeResult, error) {
-	return change(ctx, e, false, name, func(c *config.Config) error {
+	return change(ctx, e, false, []string{name}, func(c *config.Config) error {
 		if _, ok := c.Servers[name]; ok {
 			return fmt.Errorf("server %q already exists; use: maple mcp set %s", name, name)
 		}
@@ -35,7 +35,7 @@ func Add(ctx context.Context, e Env, name string, s *config.Server) (*ChangeResu
 // Set changes an existing server through edit. force overwrites agent
 // entries the user modified by hand.
 func Set(ctx context.Context, e Env, name string, edit func(*config.Server) error, force bool) (*ChangeResult, error) {
-	return change(ctx, e, force, name, func(c *config.Config) error {
+	return change(ctx, e, force, []string{name}, func(c *config.Config) error {
 		s, err := lookup(c, name)
 		if err != nil {
 			return err
@@ -46,7 +46,7 @@ func Set(ctx context.Context, e Env, name string, edit func(*config.Server) erro
 
 // Remove deletes a server.
 func Remove(ctx context.Context, e Env, name string, force bool) (*ChangeResult, error) {
-	return change(ctx, e, force, name, func(c *config.Config) error {
+	return change(ctx, e, force, []string{name}, func(c *config.Config) error {
 		if _, err := lookup(c, name); err != nil {
 			return err
 		}
@@ -57,7 +57,7 @@ func Remove(ctx context.Context, e Env, name string, force bool) (*ChangeResult,
 
 // SetEnabled enables or disables a server.
 func SetEnabled(ctx context.Context, e Env, name string, on bool) (*ChangeResult, error) {
-	return change(ctx, e, false, name, func(c *config.Config) error {
+	return change(ctx, e, false, []string{name}, func(c *config.Config) error {
 		s, err := lookup(c, name)
 		if err != nil {
 			return err
@@ -90,21 +90,32 @@ func lookup(c *config.Config, name string) (*config.Server, error) {
 
 // change runs one locked read-modify-write of config.yaml, updates the
 // agents when the set of direct servers changed, and then checks that the
-// gateway reloaded.
-func change(ctx context.Context, e Env, force bool, name string, mutate func(*config.Config) error) (*ChangeResult, error) {
-	raw, res, applyErr, err := write(ctx, e, force, name, mutate)
+// gateway reloaded. names are the servers mutate adds or edits.
+func change(ctx context.Context, e Env, force bool, names []string, mutate func(*config.Config) error) (*ChangeResult, error) {
+	res, applyErr, err := commit(ctx, e, force, names, mutate)
 	if err != nil {
 		return nil, err
 	}
-	// Outside the lock: the gateway takes it to reload.
-	res.Reloaded, res.Note = confirmReload(ctx, e, raw)
 	if applyErr != nil {
 		return res, fmt.Errorf("config.yaml saved, but updating agent configs failed: %w", applyErr)
 	}
 	return res, nil
 }
 
-func write(ctx context.Context, e Env, force bool, name string, mutate func(*config.Config) error) (raw []byte, res *ChangeResult, applyErr, err error) {
+// commit is change with the two failure kinds kept apart: err means
+// config.yaml was not saved, applyErr means it was but the agents were not
+// updated.
+func commit(ctx context.Context, e Env, force bool, names []string, mutate func(*config.Config) error) (res *ChangeResult, applyErr, err error) {
+	raw, res, applyErr, err := write(ctx, e, force, names, mutate)
+	if err != nil {
+		return nil, nil, err
+	}
+	// Outside the lock: the gateway takes it to reload.
+	res.Reloaded, res.Note = confirmReload(ctx, e, raw)
+	return res, applyErr, nil
+}
+
+func write(ctx context.Context, e Env, force bool, names []string, mutate func(*config.Config) error) (raw []byte, res *ChangeResult, applyErr, err error) {
 	unlock, err := lockConfig(ctx, e)
 	if err != nil {
 		return nil, nil, nil, err
@@ -122,10 +133,12 @@ func write(ctx context.Context, e Env, force bool, name string, mutate func(*con
 	if err := c.Validate(); err != nil {
 		return nil, nil, nil, err
 	}
-	// A disabled server is never started, so it may wait for its secrets.
-	if s, ok := c.Servers[name]; ok && s != nil && s.IsEnabled() {
-		if err := checkSecrets(e.Keychain, name, s); err != nil {
-			return nil, nil, nil, err
+	for _, name := range names {
+		// A disabled server is never started, so it may wait for its secrets.
+		if s, ok := c.Servers[name]; ok && s != nil && s.IsEnabled() {
+			if err := checkSecrets(e.Keychain, name, s); err != nil {
+				return nil, nil, nil, err
+			}
 		}
 	}
 	changed := !slices.Equal(before, directSet(c))
