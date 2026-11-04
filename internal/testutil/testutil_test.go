@@ -22,18 +22,6 @@ func newClient() *mcp.Client {
 	return mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil)
 }
 
-func textOf(t *testing.T, res *mcp.CallToolResult) string {
-	t.Helper()
-	if len(res.Content) != 1 {
-		t.Fatalf("content = %d items", len(res.Content))
-	}
-	tc, ok := res.Content[0].(*mcp.TextContent)
-	if !ok {
-		t.Fatalf("content type %T", res.Content[0])
-	}
-	return tc.Text
-}
-
 func TestFakeMCPRoundTrip(t *testing.T) {
 	bin := BuildFakeMCP(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -64,14 +52,14 @@ func TestFakeMCPRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := textOf(t, res); got != "hi" {
+	if got := Text(t, res); got != "hi" {
 		t.Errorf("echo = %q", got)
 	}
 	res, err = sess.CallTool(ctx, &mcp.CallToolParams{Name: "bad", Arguments: map[string]any{}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := textOf(t, res); got != "bad" {
+	if got := Text(t, res); got != "bad" {
 		t.Errorf("bad = %q", got)
 	}
 }
@@ -92,7 +80,7 @@ func TestHTTPServerRequiresHeader(t *testing.T) {
 				_ = s.Close()
 				t.Fatal("connect without header succeeded")
 			}
-			hc := &http.Client{Transport: headerRT{"X-Token", "secret"}}
+			hc := &http.Client{Transport: HeaderTransport{"X-Token": "secret"}}
 			s, err := newClient().Connect(ctx, mk(hc), nil)
 			if err != nil {
 				t.Fatal(err)
@@ -102,7 +90,7 @@ func TestHTTPServerRequiresHeader(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := textOf(t, res); got != "yo" {
+			if got := Text(t, res); got != "yo" {
 				t.Errorf("echo = %q", got)
 			}
 		})
@@ -119,14 +107,6 @@ func TestOAuthServer(t *testing.T) {
 	if resp.StatusCode != 401 || resp.Header.Get("WWW-Authenticate") != `Bearer resource_metadata="`+srv.URL+`/.well-known/oauth-protected-resource"` {
 		t.Errorf("got %d %q", resp.StatusCode, resp.Header.Get("WWW-Authenticate"))
 	}
-}
-
-type headerRT [2]string
-
-func (h headerRT) RoundTrip(r *http.Request) (*http.Response, error) {
-	r = r.Clone(r.Context())
-	r.Header.Set(h[0], h[1])
-	return http.DefaultTransport.RoundTrip(r)
 }
 
 func TestFakeMCPStartFlags(t *testing.T) {
@@ -185,7 +165,7 @@ func TestFakeMCPTools(t *testing.T) {
 		Cwd string            `json:"cwd"`
 		Env map[string]string `json:"env"`
 	}
-	if err := json.Unmarshal([]byte(textOf(t, res)), &got); err != nil {
+	if err := json.Unmarshal([]byte(Text(t, res)), &got); err != nil {
 		t.Fatal(err)
 	}
 	wantDir, _ := filepath.EvalSymlinks(cmd.Dir)

@@ -8,14 +8,13 @@ import (
 	"maps"
 	"os"
 	"slices"
-	"strconv"
 
 	"github.com/SkyeBeFreeman/maple/internal/config"
 	"github.com/SkyeBeFreeman/maple/internal/platform/atomicfile"
 )
 
 // GatewayName is the entry name of the maple gateway in every agent.
-const GatewayName = "maple"
+const GatewayName = config.GatewayName
 
 const (
 	maxAttempts    = 3
@@ -29,19 +28,15 @@ var beforeWrite func(path string)
 // Desired returns the entries maple wants in every agent: the gateway first,
 // then one stdio entry per enabled direct server, sorted by name.
 func Desired(cfg *config.Config, token, mapleBin string) []Entry {
-	port := cfg.Port
-	if port == 0 {
-		port = config.DefaultPort
-	}
 	out := []Entry{{
 		Name:    GatewayName,
-		URL:     "http://127.0.0.1:" + strconv.Itoa(port) + "/mcp",
+		URL:     "http://" + config.LoopbackAddr(config.EffectivePort(cfg.Port)) + "/mcp",
 		Headers: map[string]string{"Authorization": "Bearer " + token},
 	}}
 	names := slices.Sorted(maps.Keys(cfg.Servers))
 	for _, name := range names {
 		s := cfg.Servers[name]
-		if s.IsStdio() && s.EffectiveMode() == config.ModeDirect && s.IsEnabled() {
+		if s.IsDirect() && s.IsEnabled() {
 			out = append(out, Entry{Name: name, Command: mapleBin, Args: []string{"run", name}})
 		}
 	}

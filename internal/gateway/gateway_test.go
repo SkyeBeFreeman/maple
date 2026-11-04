@@ -55,7 +55,9 @@ func newEnv(t *testing.T) *env {
 	// Registered before any start so it runs after every gateway stopped.
 	t.Cleanup(func() {
 		for _, pid := range e.pids() {
-			waitGone(t, pid, 5*time.Second)
+			if !testutil.Gone(pid, 5*time.Second) {
+				t.Errorf("pid %d still alive", pid)
+			}
 		}
 	})
 	return e
@@ -128,20 +130,12 @@ func (e *env) stop() {
 	}
 }
 
-type tokenTransport struct{ base http.RoundTripper }
-
-func (t tokenTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	r = r.Clone(r.Context())
-	r.Header.Set("Authorization", "Bearer "+testToken)
-	return t.base.RoundTrip(r)
-}
-
 func (e *env) connect(opts *mcp.ClientOptions) *mcp.ClientSession {
 	e.t.Helper()
 	c := mcp.NewClient(&mcp.Implementation{Name: "agent", Version: "1"}, opts)
 	tr := &mcp.StreamableClientTransport{
 		Endpoint:   e.url + "/mcp",
-		HTTPClient: &http.Client{Transport: tokenTransport{http.DefaultTransport}},
+		HTTPClient: &http.Client{Transport: testutil.HeaderTransport{"Authorization": "Bearer " + testToken}},
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -188,29 +182,6 @@ func (e *env) status(token string) (*http.Response, *config.Status) {
 	return resp, &st
 }
 
-func waitGone(t *testing.T, pid int, d time.Duration) {
-	t.Helper()
-	deadline := time.Now().Add(d)
-	for !errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
-		if time.Now().After(deadline) {
-			t.Errorf("pid %d still alive", pid)
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-}
-
-func eventually(t *testing.T, d time.Duration, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(d)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-}
-
 func toolNames(t *testing.T, cs *mcp.ClientSession) map[string]*mcp.Tool {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -233,16 +204,6 @@ func call(t *testing.T, cs *mcp.ClientSession, name string, args any) (*mcp.Call
 	return cs.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
 }
 
-func resultText(r *mcp.CallToolResult) string {
-	var b strings.Builder
-	for _, c := range r.Content {
-		if tc, ok := c.(*mcp.TextContent); ok {
-			b.WriteString(tc.Text)
-		}
-	}
-	return b.String()
-}
-
 func TestListAndCall(t *testing.T) {
 	e := newEnv(t)
 	e.writeConfig("servers:\n  fake:\n" + e.fake("", "    disabled_tools: [crash]\n"))
@@ -263,7 +224,7 @@ func TestListAndCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.IsError || resultText(res) != "hi" {
+	if res.IsError || testutil.Text(t, res) != "hi" {
 		t.Fatalf("result %+v", res)
 	}
 }
@@ -294,7 +255,7 @@ func TestNonObjectSchemaIsNormalized(t *testing.T) {
 		t.Fatalf("schema = %s", b)
 	}
 	res, err := call(t, cs, "fake__echo", map[string]any{"text": "ok"})
-	if err != nil || resultText(res) != "ok" {
+	if err != nil || testutil.Text(t, res) != "ok" {
 		t.Fatalf("echo after bad schema: %v %+v", err, res)
 	}
 }
@@ -310,7 +271,7 @@ func TestMissingSecret(t *testing.T) {
 	}
 	c := emptyCache()
 	c.Servers["h"] = CachedServer{
-		Hash:  connHash(cfg.Servers["h"]),
+		Hash:  cfg.Servers["h"].ConnHash(),
 		Tools: []*mcp.Tool{{Name: "echo", InputSchema: map[string]any{"type": "object"}}},
 	}
 	if err := c.Save(e.paths); err != nil {
@@ -324,11 +285,11 @@ func TestMissingSecret(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := "maple: h: missing secret NOPE; run: maple secret set NOPE"
-	if !res.IsError || resultText(res) != want {
-		t.Fatalf("result = %q (isError %v), want %q", resultText(res), res.IsError, want)
+	if !res.IsError || testutil.Text(t, res) != want {
+		t.Fatalf("result = %q (isError %v), want %q", testutil.Text(t, res), res.IsError, want)
 	}
 	res, err = call(t, cs, "fake__echo", map[string]any{"text": "hi"})
-	if err != nil || res.IsError || resultText(res) != "hi" {
+	if err != nil || res.IsError || testutil.Text(t, res) != "hi" {
 		t.Fatalf("fake__echo: %v %+v", err, res)
 	}
 }
@@ -362,22 +323,22 @@ func TestReloadNotifiesClients(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("no tools/list_changed within 1s")
 	}
-	eventually(t, 5*time.Second, "more__echo", func() bool { return toolNames(t, cs)["more__echo"] != nil })
+	testutil.Eventually(t, 5*time.Second, "more__echo", func() bool { return toolNames(t, cs)["more__echo"] != nil })
 
 	e.writeConfig("servers: [oops\n")
-	eventually(t, 5*time.Second, "reload_error", func() bool {
+	testutil.Eventually(t, 5*time.Second, "reload_error", func() bool {
 		_, st := e.status(testToken)
 		return st != nil && st.ReloadError != ""
 	})
 	res, err := call(t, cs, "fake__echo", map[string]any{"text": "still"})
-	if err != nil || res.IsError || resultText(res) != "still" {
+	if err != nil || res.IsError || testutil.Text(t, res) != "still" {
 		t.Fatalf("old tool after bad reload: %v %+v", err, res)
 	}
 
 	// Restoring the loaded content must clear the error, though the
 	// loaded config itself does not change.
 	e.writeConfig(base + "  more:\n" + e.fake("", ""))
-	eventually(t, 5*time.Second, "reload_error cleared", func() bool {
+	testutil.Eventually(t, 5*time.Second, "reload_error cleared", func() bool {
 		_, st := e.status(testToken)
 		return st != nil && st.ReloadError == ""
 	})
@@ -393,7 +354,7 @@ func (e *env) seedCache(names ...string) {
 	c := emptyCache()
 	for _, n := range names {
 		c.Servers[n] = CachedServer{
-			Hash:  connHash(cfg.Servers[n]),
+			Hash:  cfg.Servers[n].ConnHash(),
 			Tools: []*mcp.Tool{{Name: "echo", InputSchema: map[string]any{"type": "object"}}},
 		}
 	}
@@ -425,15 +386,15 @@ func TestRemoteErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := "maple: auth: authentication failed; check the secrets it uses: ${TOK}; run: maple secret set TOK"
-	if !res.IsError || resultText(res) != want {
-		t.Fatalf("auth result = %q, want %q", resultText(res), want)
+	if !res.IsError || testutil.Text(t, res) != want {
+		t.Fatalf("auth result = %q, want %q", testutil.Text(t, res), want)
 	}
 	res, err = call(t, cs, "gone__echo", map[string]any{"text": "hi"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	prefix := "maple: gone: cannot reach " + closed + ": "
-	if got := resultText(res); !res.IsError || !strings.HasPrefix(got, prefix) || !strings.HasSuffix(got, "connection refused") || strings.Contains(got, "initialize") {
+	if got := testutil.Text(t, res); !res.IsError || !strings.HasPrefix(got, prefix) || !strings.HasSuffix(got, "connection refused") || strings.Contains(got, "initialize") {
 		t.Fatalf("unreachable result = %q, want prefix %q and connection refused", got, prefix)
 	}
 }
@@ -459,7 +420,7 @@ func TestEditKeepsUpstream(t *testing.T) {
 	before := e.pids()
 
 	e.writeConfig("servers:\n  fake:\n" + e.fake("", "    description: Edited purpose\n    disabled_tools: [sleep]\n"))
-	eventually(t, 5*time.Second, "fake__sleep removed", func() bool { return toolNames(t, cs)["fake__sleep"] == nil })
+	testutil.Eventually(t, 5*time.Second, "fake__sleep removed", func() bool { return toolNames(t, cs)["fake__sleep"] == nil })
 	if after := e.pids(); len(after) != len(before) {
 		t.Fatalf("starts went from %d to %d", len(before), len(after))
 	}
@@ -549,7 +510,7 @@ func TestPerSessionEndsWithClient(t *testing.T) {
 	if err := cs.Close(); err != nil {
 		t.Fatal(err)
 	}
-	waitGone(t, pid, time.Second)
+	testutil.WaitGone(t, pid, time.Second)
 }
 
 func TestSecretsNotLogged(t *testing.T) {
@@ -569,8 +530,8 @@ func TestSecretsNotLogged(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("crash result not an error: %+v", res)
 	}
-	if strings.Contains(resultText(res), secret) {
-		t.Fatalf("result leaks secret: %q", resultText(res))
+	if strings.Contains(testutil.Text(t, res), secret) {
+		t.Fatalf("result leaks secret: %q", testutil.Text(t, res))
 	}
 	_ = cs.Close()
 	e.stop()
@@ -621,6 +582,28 @@ func TestStatus(t *testing.T) {
 	}
 }
 
+// A rewritten token file must take effect without a restart: the old token
+// stops working and the new one starts.
+func TestTokenRotation(t *testing.T) {
+	e := newEnv(t)
+	e.writeConfig("servers: {}\n")
+	e.start()
+	if resp, _ := e.status(testToken); resp.StatusCode != http.StatusOK {
+		t.Fatalf("initial token: status %d", resp.StatusCode)
+	}
+	const rotated = "rotated-token-9876543210"
+	if err := os.WriteFile(e.paths.Token(), []byte(rotated+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	testutil.Eventually(t, 5*time.Second, "new token accepted", func() bool {
+		resp, _ := e.status(rotated)
+		return resp.StatusCode == http.StatusOK
+	})
+	if resp, _ := e.status(testToken); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("old token: status %d, want 401", resp.StatusCode)
+	}
+}
+
 func TestPortChangeStopsServe(t *testing.T) {
 	e := newEnv(t)
 	ln := listen(t)
@@ -652,6 +635,8 @@ func TestPortChangeStopsServe(t *testing.T) {
 		t.Fatal("Serve kept running after the port changed")
 	}
 	for _, pid := range e.pids() {
-		waitGone(t, pid, 5*time.Second)
+		if !testutil.Gone(pid, 5*time.Second) {
+			t.Errorf("pid %d still alive", pid)
+		}
 	}
 }

@@ -13,21 +13,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/SkyeBeFreeman/maple/internal/config"
 	"github.com/SkyeBeFreeman/maple/internal/gateway/upstream"
-)
-
-// Modes a server can run in; "" (remote) behaves like ModeShared.
-const (
-	ModeShared     = "shared"
-	ModePerSession = "per-session"
-)
-
-// Values of State.State.
-const (
-	StateRunning = "running"
-	StateIdle    = "idle"
-	StateStopped = "stopped"
-	StateError   = "error"
 )
 
 const (
@@ -64,7 +51,7 @@ func DefaultOptions() Options {
 // handshake.
 type Dialer func(ctx context.Context, server string) (upstream.Session, error)
 
-// State is the pool's view of one server.
+// State is the pool's view of one server. State is one of config.State*.
 type State struct {
 	State     string
 	PID       int
@@ -359,11 +346,11 @@ func (p *Pool) discard(inst *instance, key string) {
 }
 
 // Call runs one tools/call. mode "" (remote) shares one connection like
-// ModeShared; ModePerSession keeps one instance per agent session. The whole
-// call, including a start, is bounded by CallTimeout.
+// config.ModeShared; config.ModePerSession keeps one instance per agent
+// session. The whole call, including a start, is bounded by CallTimeout.
 func (p *Pool) Call(ctx context.Context, server, mode, sessionID string, params *mcp.CallToolParams) (*mcp.CallToolResult, error) {
 	key, shared := server, true
-	if mode == ModePerSession {
+	if mode == config.ModePerSession {
 		key, shared = server+"\x00"+sessionID, false
 	} else {
 		sessionID = ""
@@ -472,7 +459,7 @@ func (p *Pool) list(ctx context.Context, server, mode string) (*mcp.InitializeRe
 		info = s.Info()
 		return err
 	}
-	if mode != ModePerSession {
+	if mode != config.ModePerSession {
 		if err := p.with(ctx, server, server, "", true, list); err != nil {
 			return nil, nil, err
 		}
@@ -544,9 +531,9 @@ func (p *Pool) Status() map[string]State {
 	defer p.mu.Unlock()
 	out := map[string]State{}
 	for name, s := range p.servers {
-		st := State{State: StateIdle, LastError: s.lastErr}
+		st := State{State: config.StateIdle, LastError: s.lastErr}
 		if s.crashed {
-			st.State = StateStopped
+			st.State = config.StateStopped
 		}
 		out[name] = st
 	}
@@ -555,7 +542,7 @@ func (p *Pool) Status() map[string]State {
 			continue
 		}
 		st := out[inst.server]
-		st.State = StateRunning
+		st.State = config.StateRunning
 		if inst.shared {
 			st.PID = inst.sess.PID()
 		}
@@ -565,7 +552,7 @@ func (p *Pool) Status() map[string]State {
 	for name, s := range p.servers {
 		if now.Before(s.cooldown) {
 			st := out[name]
-			st.State = StateError
+			st.State = config.StateError
 			out[name] = st
 		}
 	}

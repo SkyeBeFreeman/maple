@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"net"
 	"os"
 	"slices"
 	"strconv"
@@ -41,23 +40,46 @@ type doctorState struct {
 	applied    *config.Applied
 	appliedErr error
 	gatewayUp  bool
+	agents     []agentFile
+}
+
+// agentFile is one agent's config file, read and listed once for every
+// check that looks at it.
+type agentFile struct {
+	a       agentconf.Agent
+	path    string
+	data    []byte
+	readErr error
+	list    []agentconf.Foreign
+	listErr error
+}
+
+func readAgentFile(e Env, a agentconf.Agent) agentFile {
+	f := agentFile{a: a, path: a.Path(e.Paths)}
+	if f.data, f.readErr = os.ReadFile(f.path); f.readErr == nil {
+		f.list, f.listErr = a.List(f.data)
+	}
+	return f
 }
 
 // Doctor runs every check of spec 10.3 in a fixed order. It never reads
 // secret values.
 func Doctor(ctx context.Context, e Env) []Check {
 	var st doctorState
-	st.cfg, _, st.cfgErr = load(e.Paths)
+	st.cfg, st.cfgErr = LoadConfig(e.Paths)
 	st.token, st.tokenErr = loadToken(e.Paths)
 	st.applied, st.appliedErr = config.LoadApplied(e.Paths)
+	for _, a := range agents(e) {
+		st.agents = append(st.agents, readAgentFile(e, a))
+	}
 
 	checks := []Check{doctorLaunchd(ctx), doctorGateway(ctx, e, &st)}
 	checks = append(checks, doctorPort(&st))
-	for _, id := range []string{"claude", "codex", "codebuddy"} {
-		checks = append(checks, doctorAgent(e, &st, id))
+	for _, f := range st.agents {
+		checks = append(checks, doctorAgent(e, &st, f))
 	}
 	checks = append(checks,
-		doctorDirect(e, &st),
+		doctorDirect(&st),
 		doctorApplied(e, &st),
 		doctorSecrets(e, &st),
 		doctorCommands(ctx, e, &st),
@@ -111,39 +133,26 @@ func doctorPort(st *doctorState) Check {
 	if st.gatewayUp {
 		return ok(name, "port "+port+" is held by the maple gateway")
 	}
-	ln, err := net.Listen("tcp", "127.0.0.1:"+port)
-	if err != nil {
+	if probePort(st.cfg.Port) != nil {
 		return fail(name, "port "+port+" is used by another process",
 			"find it with: lsof -nP -iTCP:"+port+" -sTCP:LISTEN; stop it or change port in config.yaml and run: maple sync")
 	}
-	_ = ln.Close()
 	return ok(name, "port "+port+" is free (the gateway is not listening)")
 }
 
-func agentByID(id string) agentconf.Agent {
-	for _, a := range agentconf.All() {
-		if a.ID() == id {
-			return a
-		}
-	}
-	return nil
-}
-
-func doctorAgent(e Env, st *doctorState, id string) Check {
+func doctorAgent(e Env, st *doctorState, f agentFile) Check {
+	a, id, path := f.a, f.a.ID(), f.path
 	name := "agent:" + id
-	a := agentByID(id)
-	path := a.Path(e.Paths)
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
+	if errors.Is(f.readErr, os.ErrNotExist) {
 		return ok(name, "not installed")
 	}
-	if err != nil {
-		return fail(name, err.Error(), "check the permissions of "+path)
+	if f.readErr != nil {
+		return fail(name, f.readErr.Error(), "check the permissions of "+path)
 	}
-	list, err := a.List(data)
-	if err != nil {
-		return fail(name, path+": "+err.Error(), "fix the syntax of "+path)
+	if f.listErr != nil {
+		return fail(name, path+": "+f.listErr.Error(), "fix the syntax of "+path)
 	}
+	list := f.list
 	i := slices.IndexFunc(list, func(f agentconf.Foreign) bool { return f.Name == agentconf.GatewayName })
 	switch {
 	case i < 0:
@@ -161,7 +170,7 @@ func doctorAgent(e Env, st *doctorState, id string) Check {
 	if st.appliedErr == nil && st.applied.Agents[id] != nil {
 		h = st.applied.Agents[id].Entries[agentconf.GatewayName]
 	}
-	cur, _, _ := a.Canonical(data, agentconf.GatewayName)
+	cur, _, _ := a.Canonical(f.data, agentconf.GatewayName)
 	switch {
 	case h == "":
 		return fail(name, detail+"; it is your own entry, not maple's", "rename or remove your maple entry in "+path+", then run: maple sync")
@@ -195,28 +204,23 @@ func recorded(st *doctorState) map[string][]string {
 	return out
 }
 
-func doctorDirect(e Env, st *doctorState) Check {
+func doctorDirect(st *doctorState) Check {
 	const name = "direct-entries"
 	var bad []string
 	n := 0
 	rec := recorded(st)
-	for _, a := range agentconf.All() {
-		names := rec[a.ID()]
-		data, err := os.ReadFile(a.Path(e.Paths))
-		if err != nil {
+	for _, af := range st.agents {
+		if af.readErr != nil || af.listErr != nil {
 			continue
 		}
-		list, err := a.List(data)
-		if err != nil {
-			continue
-		}
-		for _, f := range list {
+		names := rec[af.a.ID()]
+		for _, f := range af.list {
 			if f.Name == agentconf.GatewayName || !slices.Contains(names, f.Name) || f.Command == "" {
 				continue
 			}
 			n++
 			if fi, err := os.Stat(f.Command); err != nil || fi.IsDir() {
-				bad = append(bad, a.ID()+"/"+f.Name+" -> "+f.Command)
+				bad = append(bad, af.a.ID()+"/"+f.Name+" -> "+f.Command)
 			}
 		}
 	}
@@ -235,22 +239,22 @@ func doctorApplied(e Env, st *doctorState) Check {
 		return fail(name, st.appliedErr.Error(), "delete "+e.Paths.Applied()+" and run: maple sync")
 	}
 	var bad []string
-	for _, a := range agentconf.All() {
+	for _, f := range st.agents {
+		a := f.a
 		aa := st.applied.Agents[a.ID()]
 		if aa == nil || len(aa.Entries) == 0 {
 			continue
 		}
-		data, err := os.ReadFile(a.Path(e.Paths))
-		if errors.Is(err, os.ErrNotExist) {
+		if errors.Is(f.readErr, os.ErrNotExist) {
 			// The agent was uninstalled; sync cannot change that.
 			continue
 		}
-		if err != nil {
-			bad = append(bad, a.ID()+": "+err.Error())
+		if f.readErr != nil {
+			bad = append(bad, a.ID()+": "+f.readErr.Error())
 			continue
 		}
 		for _, entry := range slices.Sorted(maps.Keys(aa.Entries)) {
-			cur, found, err := a.Canonical(data, entry)
+			cur, found, err := a.Canonical(f.data, entry)
 			switch {
 			case err != nil:
 				bad = append(bad, a.ID()+": "+err.Error())

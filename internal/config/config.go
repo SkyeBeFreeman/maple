@@ -8,8 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -18,6 +19,24 @@ import (
 
 // DefaultPort is used when config.yaml has no port.
 const DefaultPort = 47321
+
+// GatewayName is the gateway's own entry name in the agents' configs; a
+// direct server with this name would collide with it.
+const GatewayName = "maple"
+
+// EffectivePort is port with its default applied.
+func EffectivePort(port int) int {
+	if port == 0 {
+		return DefaultPort
+	}
+	return port
+}
+
+func validPort(port int) bool { return port >= 1 && port <= 65535 }
+
+// LoopbackAddr is where the gateway listens. Clients send it as the Host
+// too, since the gateway rejects foreign Host values.
+func LoopbackAddr(port int) string { return "127.0.0.1:" + strconv.Itoa(port) }
 
 // Mode and transport values accepted in config.yaml.
 const (
@@ -56,6 +75,10 @@ func (s *Server) IsEnabled() bool { return s.Enabled == nil || *s.Enabled }
 // IsStdio reports whether the server is a local process rather than remote.
 func (s *Server) IsStdio() bool { return s.Command != "" }
 
+// IsDirect reports whether the agents run the server themselves through
+// maple run instead of the gateway serving it.
+func (s *Server) IsDirect() bool { return s.IsStdio() && s.EffectiveMode() == ModeDirect }
+
 // EffectiveMode is the stdio process mode with its default applied; remote
 // servers have no mode.
 func (s *Server) EffectiveMode() string {
@@ -92,6 +115,14 @@ func (s *Server) Hash() string {
 	return ContentHash(b)
 }
 
+// ConnHash is Hash without the fields that do not change how the upstream is
+// reached, so editing them neither restarts it nor drops its cached tools.
+func (s *Server) ConnHash() string {
+	c := *s
+	c.Description, c.DisabledTools, c.Enabled = "", nil, nil
+	return c.Hash()
+}
+
 // SecretRefs lists the secret names referenced from the expansion sites,
 // deduplicated and sorted. Malformed references are skipped; Validate reports
 // them.
@@ -103,12 +134,7 @@ func (s *Server) SecretRefs() []string {
 			seen[r] = true
 		}
 	}
-	names := make([]string, 0, len(seen))
-	for n := range seen {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	return names
+	return slices.Sorted(maps.Keys(seen))
 }
 
 func (s *Server) expansionSites() []string {

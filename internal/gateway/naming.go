@@ -11,7 +11,7 @@ import (
 const maxToolName = 64
 
 // ToolName returns the exposed name of an upstream tool, unique within taken,
-// and records it there; a nil taken checks nothing.
+// and records it there.
 func ToolName(server, tool string, taken map[string]bool) string {
 	// After sanitizing the name is pure ASCII, so byte cuts are rune-safe.
 	base := sanitize(server) + "__" + sanitize(tool)
@@ -27,9 +27,7 @@ func ToolName(server, tool string, taken map[string]bool) string {
 		}
 		name = b + suffix
 	}
-	if taken != nil {
-		taken[name] = true
-	}
+	taken[name] = true
 	return name
 }
 

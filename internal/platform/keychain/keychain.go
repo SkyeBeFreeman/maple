@@ -1,10 +1,7 @@
 // Package keychain stores upstream MCP secrets by name.
 package keychain
 
-import (
-	"errors"
-	"sort"
-)
+import "errors"
 
 // ErrNotFound reports that no secret with the given name exists.
 var ErrNotFound = errors.New("secret not found")
@@ -24,13 +21,4 @@ type Store interface {
 	Set(name, value string) error
 	Delete(name string) error
 	List() ([]string, error)
-}
-
-func sortedKeys(m map[string]string) []string {
-	names := make([]string, 0, len(m))
-	for k := range m {
-		names = append(names, k)
-	}
-	sort.Strings(names)
-	return names
 }

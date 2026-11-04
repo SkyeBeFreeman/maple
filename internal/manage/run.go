@@ -2,7 +2,6 @@ package manage
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -10,7 +9,6 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/SkyeBeFreeman/maple/internal/config"
 	"github.com/SkyeBeFreeman/maple/internal/platform/proc"
 )
 
@@ -21,7 +19,7 @@ var execFn = syscall.Exec
 // server itself over stdio. It must not write to stdout: that is the agent's
 // MCP channel. On success it does not return.
 func Run(ctx context.Context, e Env, name string) error {
-	c, _, err := load(e.Paths)
+	c, err := LoadConfig(e.Paths)
 	if err != nil {
 		return err
 	}
@@ -31,16 +29,12 @@ func Run(ctx context.Context, e Env, name string) error {
 		return fmt.Errorf("maple: %s: server not found; run: maple mcp list", name)
 	case !s.IsEnabled():
 		return fmt.Errorf("maple: %s: server is disabled; run: maple mcp enable %s", name, name)
-	case !s.IsStdio() || s.EffectiveMode() != config.ModeDirect:
+	case !s.IsDirect():
 		return fmt.Errorf("maple: %s: server is not in direct mode; it is served by the maple gateway", name)
 	}
-	exp, _, err := s.Expand(e.Keychain.Get)
+	exp, _, err := expandServer(e, name, s)
 	if err != nil {
-		var se *config.SecretError
-		if errors.As(err, &se) {
-			return secretErr(name, se.Name, se.Err)
-		}
-		return fmt.Errorf("maple: %s: %w", name, err)
+		return err
 	}
 	pathEnv := proc.LoginShellPath(ctx, e.Shell)
 	path, err := proc.LookPath(exp.Command, pathEnv)

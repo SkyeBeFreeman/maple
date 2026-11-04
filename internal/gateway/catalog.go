@@ -5,7 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -19,43 +20,57 @@ type exposed struct {
 	server, tool, def string
 }
 
-// connHash keys the cache and restart decisions. Description, DisabledTools
-// and Enabled do not change how the upstream is reached, so editing them
-// must neither restart it nor drop its cached tools.
-func connHash(s *config.Server) string {
-	c := *s
-	c.Description, c.DisabledTools, c.Enabled = "", nil, nil
-	return c.Hash()
-}
-
 // served reports whether the gateway exposes the server; direct servers are
 // run by the agents themselves.
 func served(s *config.Server) bool {
-	return s != nil && s.IsEnabled() && s.Mode != config.ModeDirect
+	return s != nil && s.IsEnabled() && !s.IsDirect()
 }
 
-// servedNamesLocked lists exposed servers in a stable order, which keeps tool
-// name collisions resolving the same way every time. Caller holds g.mu.
-func (g *Gateway) servedNamesLocked() []string {
-	var names []string
-	for name, s := range g.cfg.Servers {
+// setConfigLocked installs cfg together with what is derived from it, so
+// the request path does not rehash every server. Caller holds g.mu.
+func (g *Gateway) setConfigLocked(cfg *config.Config) {
+	g.cfg = cfg
+	g.connHashes = make(map[string]string, len(cfg.Servers))
+	g.served = nil
+	// Sorted, which keeps tool name collisions resolving the same way every
+	// time.
+	for _, name := range slices.Sorted(maps.Keys(cfg.Servers)) {
+		s := cfg.Servers[name]
+		if s != nil {
+			g.connHashes[name] = s.ConnHash()
+		}
 		if served(s) {
-			names = append(names, name)
+			g.served = append(g.served, name)
 		}
 	}
-	sort.Strings(names)
-	return names
 }
 
 // cachedLocked returns the cache entry of a server if it matches its current
 // config. Caller holds g.mu.
 func (g *Gateway) cachedLocked(name string) (CachedServer, bool) {
-	s := g.cfg.Servers[name]
+	h, known := g.connHashes[name]
 	cs, ok := g.cache.Servers[name]
-	if !ok || s == nil || cs.Hash != connHash(s) {
+	if !ok || !known || cs.Hash != h {
 		return CachedServer{}, false
 	}
 	return cs, true
+}
+
+// visibleToolsLocked returns a served server's cache entry and its tools
+// minus the disabled ones; ok is false while its tools are unknown. Caller
+// holds g.mu.
+func (g *Gateway) visibleToolsLocked(name string) (cs CachedServer, tools []*mcp.Tool, ok bool) {
+	cs, ok = g.cachedLocked(name)
+	if !ok {
+		return cs, nil, false
+	}
+	disabled := disabledSet(g.cfg.Servers[name])
+	for _, t := range cs.Tools {
+		if t != nil && !disabled[t.Name] {
+			tools = append(tools, t)
+		}
+	}
+	return cs, tools, true
 }
 
 func disabledSet(s *config.Server) map[string]bool {
@@ -73,16 +88,9 @@ func (g *Gateway) rebuildLocked() {
 	taken := map[string]bool{}
 	want := map[string]exposed{}
 	defs := map[string]*mcp.Tool{}
-	for _, name := range g.servedNamesLocked() {
-		cs, ok := g.cachedLocked(name)
-		if !ok {
-			continue
-		}
-		disabled := disabledSet(g.cfg.Servers[name])
-		for _, t := range cs.Tools {
-			if t == nil || disabled[t.Name] {
-				continue
-			}
+	for _, name := range g.served {
+		_, tools, _ := g.visibleToolsLocked(name)
+		for _, t := range tools {
 			n := ToolName(name, t.Name, taken)
 			def := *t
 			def.Name = n
@@ -137,6 +145,11 @@ func (g *Gateway) addTool(def *mcp.Tool, e exposed) (err error) {
 // objectSchema passes an object schema through and replaces anything else,
 // which the SDK would refuse and agents could not call anyway.
 func objectSchema(schema any) any {
+	// Decoded upstream and cached schemas already have this shape, so the
+	// round trip below is only needed for anything else.
+	if m, ok := schema.(map[string]any); ok && m["type"] == "object" {
+		return m
+	}
 	fallback := map[string]any{"type": "object"}
 	if schema == nil {
 		return fallback
@@ -156,7 +169,7 @@ func objectSchema(schema any) any {
 // cache entry and returns what to wait for. Caller holds g.mu.
 func (g *Gateway) fetchMissingLocked() []chan struct{} {
 	var waits []chan struct{}
-	for _, name := range g.servedNamesLocked() {
+	for _, name := range g.served {
 		if _, ok := g.cachedLocked(name); ok {
 			continue
 		}
@@ -180,7 +193,7 @@ func (g *Gateway) fetchLocked(name string) chan struct{} {
 	ch := make(chan struct{})
 	g.fetching[name] = ch
 	g.wg.Add(1)
-	go g.fetch(name, connHash(s), s.EffectiveMode(), ch)
+	go g.fetch(name, g.connHashes[name], s.EffectiveMode(), ch)
 	return ch
 }
 
@@ -191,15 +204,23 @@ func (g *Gateway) fetch(name, hash, mode string, ch chan struct{}) {
 	ctx, cancel := context.WithTimeout(g.bg, g.opts.ListWait)
 	info, tools, err := g.pool.List(ctx, name, mode)
 	cancel()
+	if snap, seq := g.fetched(name, hash, info, tools, err); snap != nil {
+		g.saveCache(snap, seq)
+	}
+}
 
+// fetched records a finished listing and returns a cache snapshot to save
+// when the cache changed.
+func (g *Gateway) fetched(name, hash string, info *mcp.InitializeResult, tools []*mcp.Tool, err error) (*Cache, uint64) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	delete(g.fetching, name)
 	again := g.refetch[name]
 	delete(g.refetch, name)
-	s := g.cfg.Servers[name]
-	switch {
-	case s == nil || connHash(s) != hash:
+	var snap *Cache
+	var seq uint64
+	switch h, ok := g.connHashes[name]; {
+	case !ok || h != hash:
 		// Listed under a config that has since changed.
 		again = true
 	case g.closed:
@@ -209,13 +230,28 @@ func (g *Gateway) fetch(name, hash, mode string, ch chan struct{}) {
 		g.log.Warn("cannot list tools", "server", name, "err", err.Error())
 	default:
 		g.cache.Servers[name] = CachedServer{Hash: hash, Info: info, Tools: tools, UpdatedAt: time.Now()}
-		if err := g.cache.Save(g.paths); err != nil {
-			g.log.Warn("cannot save cache", "err", err.Error())
-		}
+		g.cacheSeq++
+		snap, seq = &Cache{Version: cacheVersion, Servers: maps.Clone(g.cache.Servers)}, g.cacheSeq
 		g.rebuildLocked()
 	}
 	if again {
 		g.fetchLocked(name)
+	}
+	return snap, seq
+}
+
+// saveCache writes snap outside g.mu, which every request takes, so a slow
+// disk does not stall them. seq orders the snapshots: one taken earlier but
+// arriving later must not replace a newer one on disk.
+func (g *Gateway) saveCache(snap *Cache, seq uint64) {
+	g.saveMu.Lock()
+	defer g.saveMu.Unlock()
+	if seq <= g.savedSeq {
+		return
+	}
+	g.savedSeq = seq
+	if err := snap.Save(g.paths); err != nil {
+		g.log.Warn("cannot save cache", "err", err.Error())
 	}
 }
 
@@ -286,18 +322,14 @@ func (g *Gateway) instructions() string {
 	var infos []ServerInfo
 	// Only servers whose tools are known: one still starting, or broken,
 	// would be advertised without anything to call.
-	for _, name := range g.servedNamesLocked() {
-		s := g.cfg.Servers[name]
-		cs, ok := g.cachedLocked(name)
+	for _, name := range g.served {
+		cs, tools, ok := g.visibleToolsLocked(name)
 		if !ok {
 			continue
 		}
-		si := ServerInfo{Name: name, About: About(s.Description, cs.Info)}
-		disabled := disabledSet(s)
-		for _, t := range cs.Tools {
-			if t != nil && !disabled[t.Name] {
-				si.Tools = append(si.Tools, ToolInfo{Name: t.Name, Description: t.Description})
-			}
+		si := ServerInfo{Name: name, About: About(g.cfg.Servers[name].Description, cs.Info)}
+		for _, t := range tools {
+			si.Tools = append(si.Tools, ToolInfo{Name: t.Name, Description: t.Description})
 		}
 		if len(si.Tools) > 0 {
 			infos = append(infos, si)

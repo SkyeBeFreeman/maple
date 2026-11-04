@@ -1,8 +1,11 @@
 package gateway
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -64,6 +67,26 @@ func TestCacheSaveSetsVersion(t *testing.T) {
 	}
 }
 
+func TestCacheSaveReplacesUnreadableFile(t *testing.T) {
+	p := config.Paths{Home: t.TempDir()}
+	if err := os.MkdirAll(filepath.Dir(p.Cache()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.Cache(), []byte("{}"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&Cache{Servers: map[string]CachedServer{"a": {Hash: "h"}}}).Save(p); err != nil {
+		t.Fatalf("save over unreadable cache: %v", err)
+	}
+	st, err := os.Stat(p.Cache())
+	if err != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("stat %v %v", st, err)
+	}
+	if got := LoadCache(p); got.Servers["a"].Hash != "h" {
+		t.Fatalf("cache = %+v", got)
+	}
+}
+
 func TestCacheCorruptIsEmpty(t *testing.T) {
 	for name, data := range map[string]string{
 		"garbage": "{not json",
@@ -82,5 +105,34 @@ func TestCacheCorruptIsEmpty(t *testing.T) {
 				t.Fatalf("cache = %+v", c)
 			}
 		})
+	}
+}
+
+// Snapshots are written outside the gateway's lock, so they can reach
+// saveCache out of order; the newest must be what stays on disk.
+func TestSaveCacheKeepsNewestSnapshot(t *testing.T) {
+	p := config.Paths{Home: t.TempDir()}
+	g := New(p, nil, Options{Logger: slog.New(slog.DiscardHandler)})
+	snap := func(hash string) *Cache {
+		return &Cache{Version: cacheVersion, Servers: map[string]CachedServer{"a": {Hash: hash}}}
+	}
+	g.saveCache(snap("new"), 2)
+	g.saveCache(snap("old"), 1)
+	if got := LoadCache(p).Servers["a"].Hash; got != "new" {
+		t.Fatalf("hash on disk = %q, want new", got)
+	}
+
+	// Concurrent saves end with the highest sequence number on disk.
+	var wg sync.WaitGroup
+	for i := uint64(3); i <= 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			g.saveCache(snap(strconv.FormatUint(i, 10)), i)
+		}()
+	}
+	wg.Wait()
+	if got := LoadCache(p).Servers["a"].Hash; got != "20" {
+		t.Fatalf("hash on disk = %q, want 20", got)
 	}
 }

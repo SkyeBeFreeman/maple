@@ -1,7 +1,6 @@
 package manage
 
 import (
-	"bytes"
 	"context"
 	_ "embed"
 	"errors"
@@ -10,7 +9,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -74,7 +72,7 @@ func Install(ctx context.Context, e Env, o InstallOptions) (*InstallResult, erro
 	if err != nil {
 		return res, err
 	}
-	changed, err := writeIfDifferent(e.Paths.SkillFile(), skillMD, 0o644)
+	changed, err := atomicfile.WriteFileIfDifferent(e.Paths.SkillFile(), skillMD, 0o644, 0o755)
 	if err != nil {
 		return res, fmt.Errorf("write %s: %w", e.Paths.SkillFile(), err)
 	}
@@ -98,12 +96,9 @@ func installState(ctx context.Context, e Env, o InstallOptions, res *InstallResu
 	_, err = os.Stat(e.Paths.Config())
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		port := o.Port
-		if port == 0 {
-			port = config.DefaultPort
-		}
+		port := config.EffectivePort(o.Port)
 		if err := probePort(port); err != nil {
-			return err
+			return fmt.Errorf("port %d is in use; rerun with --port", port)
 		}
 		if err := config.Save(e.Paths, &config.Config{Port: port, Servers: map[string]*config.Server{}}); err != nil {
 			return fmt.Errorf("save config: %w", err)
@@ -131,10 +126,11 @@ func installState(ctx context.Context, e Env, o InstallOptions, res *InstallResu
 	return nil
 }
 
+// probePort fails when another process listens on the gateway's port.
 func probePort(port int) error {
-	ln, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(port))
+	ln, err := net.Listen("tcp", config.LoopbackAddr(port))
 	if err != nil {
-		return fmt.Errorf("port %d is in use; rerun with --port", port)
+		return err
 	}
 	return ln.Close()
 }
@@ -144,7 +140,7 @@ func installLaunchd(ctx context.Context, e Env, res *InstallResult) error {
 		return err
 	}
 	path := launchd.PlistPath(e.Paths.Home)
-	changed, err := writeIfDifferent(path, launchd.Plist(e.MapleBin, filepath.Join(e.Paths.LogDir(), "launchd.log")), 0o644)
+	changed, err := atomicfile.WriteFileIfDifferent(path, launchd.Plist(e.MapleBin, filepath.Join(e.Paths.LogDir(), "launchd.log")), 0o644, 0o755)
 	if err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
@@ -166,21 +162,6 @@ func installLaunchd(ctx context.Context, e Env, res *InstallResult) error {
 		return fmt.Errorf("load LaunchAgent: %w", err)
 	}
 	return nil
-}
-
-// writeIfDifferent leaves an identical file alone so reruns report no change.
-func writeIfDifferent(path string, data []byte, perm fs.FileMode) (bool, error) {
-	cur, err := os.ReadFile(path)
-	if err == nil && bytes.Equal(cur, data) {
-		return false, nil
-	}
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return false, err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return false, err
-	}
-	return true, atomicfile.WriteFile(path, data, perm)
 }
 
 // UninstallOptions controls Uninstall. Purge also deletes ~/.maple and every

@@ -2,6 +2,8 @@ package keychain
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"sync"
 )
 
@@ -61,5 +63,5 @@ func (m *Memory) Delete(name string) error {
 func (m *Memory) List() ([]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return sortedKeys(m.secrets), nil
+	return slices.Sorted(maps.Keys(m.secrets)), nil
 }

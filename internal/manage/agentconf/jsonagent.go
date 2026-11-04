@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/tidwall/gjson"
@@ -15,10 +14,6 @@ import (
 )
 
 const serversKey = "mcpServers"
-
-// Entry names become sjson/gjson path components unescaped, so they must not
-// contain path syntax characters such as '.', '*' or '?'.
-var entryNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
 
 // Claude edits ~/.claude.json.
 var Claude Agent = jsonAgent{
@@ -72,7 +67,9 @@ func (a jsonAgent) render(e Entry) any {
 }
 
 func (a jsonAgent) Set(data []byte, e Entry) ([]byte, error) {
-	if !entryNameRe.MatchString(e.Name) {
+	// Entry names become sjson/gjson path components unescaped, so they must
+	// not contain path syntax characters such as '.', '*' or '?'.
+	if !config.ValidName(e.Name) {
 		return nil, fmt.Errorf("invalid entry name %q", e.Name)
 	}
 	if e.URL == "" && e.Command == "" {
@@ -85,43 +82,34 @@ func (a jsonAgent) Set(data []byte, e Entry) ([]byte, error) {
 	}
 	unit := detectIndent(data)
 	nl := detectNewline(data)
+	// section is a whole new mcpServers object, entry a new member of it.
+	section, err := renderIndented(map[string]any{e.Name: a.render(e)}, unit, 1)
+	if err != nil {
+		return nil, err
+	}
+	section = fixNewlines(section, nl)
+	entry, err := renderIndented(a.render(e), unit, 2)
+	if err != nil {
+		return nil, err
+	}
+	entry = fixNewlines(entry, nl)
 	if data == nil {
-		v, err := renderIndented(map[string]any{e.Name: a.render(e)}, unit, 1)
-		if err != nil {
-			return nil, err
-		}
-		out := []byte("{" + nl + unit + `"` + serversKey + `": ` + string(fixNewlines(v, nl)) + nl + "}" + nl)
+		out := []byte("{" + nl + unit + `"` + serversKey + `": ` + string(section) + nl + "}" + nl)
 		return out, checkValid(out)
 	}
 
 	root := gjson.ParseBytes(data)
 	servers := root.Get(serversKey)
 	var out []byte
-	var err error
 	switch {
-	case !servers.Exists() || servers.Type == gjson.Null:
-		v, rerr := renderIndented(map[string]any{e.Name: a.render(e)}, unit, 1)
-		if rerr != nil {
-			return nil, rerr
-		}
-		v = fixNewlines(v, nl)
-		if servers.Exists() {
-			out, err = sjson.SetRawBytes(data, serversKey, v)
-		} else {
-			out, err = appendMember(data, root, serversKey, v, unit, nl, 1)
-		}
+	case servers.Exists() && servers.Type == gjson.Null:
+		out, err = sjson.SetRawBytes(data, serversKey, section)
+	case !servers.Exists():
+		out, err = appendMember(data, root, serversKey, section, unit, nl, 1)
 	case servers.Get(e.Name).Exists():
-		v, rerr := renderIndented(a.render(e), unit, 2)
-		if rerr != nil {
-			return nil, rerr
-		}
-		out, err = sjson.SetRawBytes(data, serversKey+"."+e.Name, fixNewlines(v, nl))
+		out, err = sjson.SetRawBytes(data, serversKey+"."+e.Name, entry)
 	default:
-		v, rerr := renderIndented(a.render(e), unit, 2)
-		if rerr != nil {
-			return nil, rerr
-		}
-		out, err = appendMember(data, servers, e.Name, fixNewlines(v, nl), unit, nl, 2)
+		out, err = appendMember(data, servers, e.Name, entry, unit, nl, 2)
 	}
 	if err != nil {
 		return nil, err

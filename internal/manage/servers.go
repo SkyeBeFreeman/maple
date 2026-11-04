@@ -36,7 +36,7 @@ func Add(ctx context.Context, e Env, name string, s *config.Server) (*ChangeResu
 // entries the user modified by hand.
 func Set(ctx context.Context, e Env, name string, edit func(*config.Server) error, force bool) (*ChangeResult, error) {
 	return change(ctx, e, force, []string{name}, func(c *config.Config) error {
-		s, err := lookup(c, name)
+		s, err := Lookup(c, name)
 		if err != nil {
 			return err
 		}
@@ -47,7 +47,7 @@ func Set(ctx context.Context, e Env, name string, edit func(*config.Server) erro
 // Remove deletes a server.
 func Remove(ctx context.Context, e Env, name string, force bool) (*ChangeResult, error) {
 	return change(ctx, e, force, []string{name}, func(c *config.Config) error {
-		if _, err := lookup(c, name); err != nil {
+		if _, err := Lookup(c, name); err != nil {
 			return err
 		}
 		delete(c.Servers, name)
@@ -58,7 +58,7 @@ func Remove(ctx context.Context, e Env, name string, force bool) (*ChangeResult,
 // SetEnabled enables or disables a server.
 func SetEnabled(ctx context.Context, e Env, name string, on bool) (*ChangeResult, error) {
 	return change(ctx, e, false, []string{name}, func(c *config.Config) error {
-		s, err := lookup(c, name)
+		s, err := Lookup(c, name)
 		if err != nil {
 			return err
 		}
@@ -80,14 +80,6 @@ func lockConfig(ctx context.Context, e Env) (func() error, error) {
 	return unlock, nil
 }
 
-func lookup(c *config.Config, name string) (*config.Server, error) {
-	s, ok := c.Servers[name]
-	if !ok || s == nil {
-		return nil, fmt.Errorf("server %q not found; run: maple mcp list", name)
-	}
-	return s, nil
-}
-
 // change runs one locked read-modify-write of config.yaml, updates the
 // agents when the set of direct servers changed, and then checks that the
 // gateway reloaded. names are the servers mutate adds or edits.
@@ -106,61 +98,68 @@ func change(ctx context.Context, e Env, force bool, names []string, mutate func(
 // config.yaml was not saved, applyErr means it was but the agents were not
 // updated.
 func commit(ctx context.Context, e Env, force bool, names []string, mutate func(*config.Config) error) (res *ChangeResult, applyErr, err error) {
-	raw, res, applyErr, err := write(ctx, e, force, names, mutate)
+	w, res, applyErr, err := write(ctx, e, force, names, mutate)
 	if err != nil {
 		return nil, nil, err
 	}
 	// Outside the lock: the gateway takes it to reload.
-	res.Reloaded, res.Note = confirmReload(ctx, e, raw)
+	res.Reloaded, res.Note = confirmReload(ctx, e, w.raw, w.port, w.token)
 	return res, applyErr, nil
 }
 
-func write(ctx context.Context, e Env, force bool, names []string, mutate func(*config.Config) error) (raw []byte, res *ChangeResult, applyErr, err error) {
+// written is what confirmReload needs to know about a saved config; token
+// is empty when it could not be read.
+type written struct {
+	raw   []byte
+	port  int
+	token string
+}
+
+func write(ctx context.Context, e Env, force bool, names []string, mutate func(*config.Config) error) (w written, res *ChangeResult, applyErr, err error) {
 	unlock, err := lockConfig(ctx, e)
 	if err != nil {
-		return nil, nil, nil, err
+		return w, nil, nil, err
 	}
 	defer func() { _ = unlock() }()
 
-	c, _, err := load(e.Paths)
+	c, err := LoadConfig(e.Paths)
 	if err != nil {
-		return nil, nil, nil, err
+		return w, nil, nil, err
 	}
 	before := directSet(c)
 	if err := mutate(c); err != nil {
-		return nil, nil, nil, err
+		return w, nil, nil, err
 	}
 	if err := c.Validate(); err != nil {
-		return nil, nil, nil, err
+		return w, nil, nil, err
 	}
 	for _, name := range names {
 		// A disabled server is never started, so it may wait for its secrets.
 		if s, ok := c.Servers[name]; ok && s != nil && s.IsEnabled() {
 			if err := checkSecrets(e.Keychain, name, s); err != nil {
-				return nil, nil, nil, err
+				return w, nil, nil, err
 			}
 		}
 	}
 	changed := !slices.Equal(before, directSet(c))
-	var token string
-	if changed {
-		// Read before saving so a missing token leaves config.yaml untouched.
-		if token, err = loadToken(e.Paths); err != nil {
-			return nil, nil, nil, err
-		}
+	token, tokenErr := loadToken(e.Paths)
+	if changed && tokenErr != nil {
+		// Checked before saving so a missing token leaves config.yaml untouched.
+		return w, nil, nil, tokenErr
 	}
 	if err := config.Save(e.Paths, c); err != nil {
-		return nil, nil, nil, fmt.Errorf("save config: %w", err)
+		return w, nil, nil, fmt.Errorf("save config: %w", err)
 	}
-	_, raw, err = config.Load(e.Paths)
+	_, raw, err := config.Load(e.Paths)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("reread config: %w", err)
+		return w, nil, nil, fmt.Errorf("reread config: %w", err)
 	}
+	w = written{raw: raw, port: c.Port, token: token}
 	res = &ChangeResult{}
 	if changed {
 		res.Agents, applyErr = apply(e, c, token, force)
 	}
-	return raw, res, applyErr, nil
+	return w, res, applyErr, nil
 }
 
 // directSet is what the agents' direct entries depend on.
@@ -168,7 +167,7 @@ func directSet(c *config.Config) []string {
 	var names []string
 	for _, name := range slices.Sorted(maps.Keys(c.Servers)) {
 		s := c.Servers[name]
-		if s != nil && s.IsStdio() && s.EffectiveMode() == config.ModeDirect && s.IsEnabled() {
+		if s != nil && s.IsDirect() && s.IsEnabled() {
 			names = append(names, name)
 		}
 	}

@@ -3,6 +3,7 @@
 package atomicfile
 
 import (
+	"bytes"
 	"errors"
 	"io/fs"
 	"os"
@@ -25,6 +26,23 @@ const maxSymlinks = 32
 // file's mode.
 func WriteFile(path string, data []byte, perm fs.FileMode) error {
 	return replace(path, data, perm, nil)
+}
+
+// WriteFileIfDifferent is WriteFile that leaves a file already holding data
+// alone, so reruns report no change and do not touch its mtime. Missing
+// parent directories are created with dirPerm. It reports whether it wrote.
+func WriteFileIfDifferent(path string, data []byte, perm, dirPerm fs.FileMode) (bool, error) {
+	cur, err := os.ReadFile(path)
+	if err == nil && bytes.Equal(cur, data) {
+		return false, nil
+	}
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return false, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), dirPerm); err != nil {
+		return false, err
+	}
+	return true, WriteFile(path, data, perm)
 }
 
 // WriteFileIfUnchanged is WriteFile that refuses, with ErrModified, to replace

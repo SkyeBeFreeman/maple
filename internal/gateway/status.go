@@ -1,7 +1,8 @@
 package gateway
 
 import (
-	"sort"
+	"maps"
+	"slices"
 
 	"github.com/SkyeBeFreeman/maple/internal/config"
 )
@@ -22,14 +23,10 @@ func (g *Gateway) status() config.Status {
 	for _, e := range g.tools {
 		tools[e.server]++
 	}
-	var names []string
-	for name, s := range g.cfg.Servers {
-		if s.Mode != config.ModeDirect {
-			names = append(names, name)
+	for _, name := range slices.Sorted(maps.Keys(g.cfg.Servers)) {
+		if g.cfg.Servers[name].IsDirect() {
+			continue
 		}
-	}
-	sort.Strings(names)
-	for _, name := range names {
 		ss := config.ServerStatus{Name: name, State: config.StateIdle, Tools: tools[name]}
 		if p, ok := ps[name]; ok {
 			ss.State, ss.PID, ss.LastError = p.State, p.PID, g.red.Redact(p.LastError)

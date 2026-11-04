@@ -10,7 +10,7 @@ func PeekPort(data []byte) int {
 		Port int `yaml:"port"`
 	}
 	// The other fields are ignored on purpose: only the port must be read.
-	if err := yaml.Unmarshal(data, &doc); err != nil || doc.Port < 1 || doc.Port > 65535 {
+	if err := yaml.Unmarshal(data, &doc); err != nil || !validPort(doc.Port) {
 		return DefaultPort
 	}
 	return doc.Port

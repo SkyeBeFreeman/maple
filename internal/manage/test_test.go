@@ -29,7 +29,7 @@ func TestTestRedactsSecrets(t *testing.T) {
 	e := setup(t, "servers:\n  r:\n    url: http://127.0.0.1:1/mcp?key=${R_KEY}\n")
 	_ = e.Keychain.Set("R_KEY", "sekrit123")
 	_, err := Test(context.Background(), e, "r")
-	if err == nil || strings.Contains(err.Error(), "sekrit123") {
+	if err == nil || strings.Contains(err.Error(), "sekrit123") || !strings.Contains(err.Error(), "key=***") {
 		t.Fatalf("err = %v", err)
 	}
 }

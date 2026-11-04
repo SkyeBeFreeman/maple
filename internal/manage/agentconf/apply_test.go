@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/SkyeBeFreeman/maple/internal/config"
+	"github.com/SkyeBeFreeman/maple/internal/testutil"
 )
 
 const testBin = "/opt/maple/bin/maple"
@@ -16,25 +17,7 @@ const testBin = "/opt/maple/bin/maple"
 // setupHome copies the sample agent files into a temporary HOME.
 func setupHome(t *testing.T) config.Paths {
 	t.Helper()
-	p := config.Paths{Home: t.TempDir()}
-	copyFile(t, filepath.Join("testdata", "claude", "input.json"), p.ClaudeJSON())
-	copyFile(t, filepath.Join("testdata", "codex", "input.toml"), p.CodexTOML())
-	copyFile(t, filepath.Join("testdata", "codebuddy", "input.json"), p.CodeBuddyJSON())
-	return p
-}
-
-func copyFile(t *testing.T, src, dst string) {
-	t.Helper()
-	data, err := os.ReadFile(src)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(dst, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	return testutil.AgentHome(t, "testdata")
 }
 
 func emptyApplied() *config.Applied {
@@ -319,7 +302,7 @@ func TestApplyGivesUpAfterRetries(t *testing.T) {
 func TestApplySymlinkedConfig(t *testing.T) {
 	p := setupHome(t)
 	target := filepath.Join(p.Home, "dotfiles", "mcp.json")
-	copyFile(t, p.CodeBuddyJSON(), target)
+	testutil.CopyFile(t, p.CodeBuddyJSON(), target)
 	if err := os.Remove(p.CodeBuddyJSON()); err != nil {
 		t.Fatal(err)
 	}

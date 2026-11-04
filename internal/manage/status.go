@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -23,10 +22,14 @@ const (
 
 // Status asks the running gateway for its state.
 func Status(ctx context.Context, e Env) (*config.Status, error) {
-	c, _, err := load(e.Paths)
+	c, err := LoadConfig(e.Paths)
 	if err != nil {
 		return nil, err
 	}
+	return statusOf(ctx, e, c)
+}
+
+func statusOf(ctx context.Context, e Env, c *config.Config) (*config.Status, error) {
 	token, err := loadToken(e.Paths)
 	if err != nil {
 		return nil, err
@@ -35,8 +38,7 @@ func Status(ctx context.Context, e Env) (*config.Status, error) {
 }
 
 func fetchStatus(ctx context.Context, e Env, port int, token string) (*config.Status, error) {
-	// The gateway only accepts this exact Host, so the URL must use it too.
-	url := "http://127.0.0.1:" + strconv.Itoa(port) + "/status"
+	url := "http://" + config.LoopbackAddr(port) + "/status"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -64,15 +66,10 @@ func fetchStatus(ctx context.Context, e Env, port int, token string) (*config.St
 	return &st, nil
 }
 
-// confirmReload polls the gateway until it reports the hash of raw. Failures
-// only produce a note: the config change itself already succeeded.
-func confirmReload(ctx context.Context, e Env, raw []byte) (bool, string) {
-	c, err := config.Parse(raw)
-	if err != nil {
-		return false, noteStale
-	}
-	token, err := config.LoadToken(e.Paths)
-	if err != nil {
+// confirmReload polls the gateway on port until it reports the hash of raw.
+// Failures only produce a note: the config change itself already succeeded.
+func confirmReload(ctx context.Context, e Env, raw []byte, port int, token string) (bool, string) {
+	if token == "" {
 		// Without a token the gateway cannot have been installed or started.
 		return false, noteDown
 	}
@@ -83,7 +80,7 @@ func confirmReload(ctx context.Context, e Env, raw []byte) (bool, string) {
 	defer tick.Stop()
 	note := noteStale
 	for {
-		st, err := fetchStatus(ctx, e, c.Port, token)
+		st, err := fetchStatus(ctx, e, port, token)
 		switch {
 		case errors.Is(err, ErrGatewayDown):
 			return false, noteDown

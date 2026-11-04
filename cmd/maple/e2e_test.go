@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -52,31 +51,6 @@ func (e *e2e) mustRun(stdin string, args ...string) string {
 	return out
 }
 
-func copyFile(t *testing.T, src, dst string) []byte {
-	t.Helper()
-	data, err := os.ReadFile(src)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(dst, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return data
-}
-
-func freePort(t *testing.T) int {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = ln.Close() }()
-	return ln.Addr().(*net.TCPAddr).Port
-}
-
 func TestEndToEnd(t *testing.T) {
 	tmp := t.TempDir()
 	bin := filepath.Join(tmp, "maple")
@@ -88,20 +62,20 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake := testutil.BuildFakeMCP(t)
-	home := filepath.Join(tmp, "home")
-	td := filepath.Join("..", "..", "internal", "manage", "agentconf", "testdata")
-	claudeOrig := copyFile(t, filepath.Join(td, "claude", "input.json"), filepath.Join(home, ".claude.json"))
-	codexOrig := copyFile(t, filepath.Join(td, "codex", "input.toml"), filepath.Join(home, ".codex", "config.toml"))
-	cbOrig := copyFile(t, filepath.Join(td, "codebuddy", "input.json"), filepath.Join(home, ".codebuddy", "mcp.json"))
-	agentFiles := []string{
-		filepath.Join(home, ".claude.json"),
-		filepath.Join(home, ".codex", "config.toml"),
-		filepath.Join(home, ".codebuddy", "mcp.json"),
+	p := testutil.AgentHome(t, filepath.Join("..", "..", "internal", "manage", "agentconf", "testdata"))
+	home := p.Home
+	agentFiles := []string{p.ClaudeJSON(), p.CodexTOML(), p.CodeBuddyJSON()}
+	var orig [3][]byte
+	for i, f := range agentFiles {
+		if orig[i], err = os.ReadFile(f); err != nil {
+			t.Fatal(err)
+		}
 	}
+	claudeOrig, codexOrig, cbOrig := orig[0], orig[1], orig[2]
 	e := &e2e{t: t, bin: bin, home: home}
 
 	// A free port, so a gateway the developer runs on 47321 cannot interfere.
-	out := e.mustRun("", "install", "--no-launchd", "--port", strconv.Itoa(freePort(t)), "--json")
+	out := e.mustRun("", "install", "--no-launchd", "--port", strconv.Itoa(testutil.FreePort(t)), "--json")
 	if !strings.Contains(out, "created") {
 		t.Fatalf("install output lacks created: %s", out)
 	}

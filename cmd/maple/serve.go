@@ -2,13 +2,10 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io/fs"
 	"net"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -36,10 +33,7 @@ func newServeCmd(version string) *cobra.Command {
 }
 
 func serve(ctx context.Context, e manage.Env, version string) error {
-	raw, err := os.ReadFile(e.Paths.Config())
-	if errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("%s does not exist; run: maple install", e.Paths.Config())
-	}
+	raw, err := manage.ReadConfig(e.Paths)
 	if err != nil {
 		return err
 	}
@@ -48,9 +42,10 @@ func serve(ctx context.Context, e manage.Env, version string) error {
 	// load reports it in /status.
 	port := config.PeekPort(raw)
 	// A busy port fails the process so launchd retries later.
-	ln, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(port))
+	addr := config.LoopbackAddr(port)
+	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		return fmt.Errorf("listen on 127.0.0.1:%d: %w; run: maple doctor", port, err)
+		return fmt.Errorf("listen on %s: %w; run: maple doctor", addr, err)
 	}
 	opts := gateway.DefaultOptions()
 	opts.Version = version

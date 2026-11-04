@@ -32,9 +32,7 @@ func (g *Gateway) loadToken() {
 		g.log.Warn("cannot read token", "err", err.Error())
 		return
 	}
-	g.mu.Lock()
-	g.token = tok
-	g.mu.Unlock()
+	g.setToken(tok)
 }
 
 // reload applies config.yaml if its content changed. An invalid file leaves
@@ -78,12 +76,12 @@ func (g *Gateway) reload() {
 		g.log.Warn("port changed, stopping so launchd restarts the gateway", "from", g.opts.Port, "to", cfg.Port)
 		return
 	}
-	old := g.cfg
-	g.cfg, g.cfgHash, g.reloadErr = cfg, hash, ""
+	old, oldHashes := g.cfg, g.connHashes
+	g.setConfigLocked(cfg)
+	g.cfgHash, g.reloadErr = hash, ""
 	var reset []string
-	for name, prev := range old.Servers {
-		ns := cfg.Servers[name]
-		if !served(ns) || connHash(ns) != connHash(prev) {
+	for name := range old.Servers {
+		if !served(cfg.Servers[name]) || g.connHashes[name] != oldHashes[name] {
 			reset = append(reset, name)
 		}
 	}

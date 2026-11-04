@@ -16,6 +16,7 @@ import (
 	"github.com/SkyeBeFreeman/maple/internal/manage/agentconf"
 	"github.com/SkyeBeFreeman/maple/internal/platform/keychain"
 	"github.com/SkyeBeFreeman/maple/internal/platform/launchd"
+	"github.com/SkyeBeFreeman/maple/internal/testutil"
 )
 
 func init() {
@@ -38,7 +39,7 @@ func freshHome(t *testing.T) Env {
 func TestInstallIdempotent(t *testing.T) {
 	e := freshHome(t)
 	ctx := context.Background()
-	port := freePort(t)
+	port := testutil.FreePort(t)
 	res, err := Install(ctx, e, InstallOptions{Port: port, NoLaunchd: true})
 	if err != nil {
 		t.Fatal(err)
@@ -113,7 +114,7 @@ func TestUninstallRestoresUserFiles(t *testing.T) {
 	e := freshHome(t)
 	ctx := context.Background()
 	before := snapshot(t, e)
-	if _, err := Install(ctx, e, InstallOptions{Port: freePort(t), NoLaunchd: true}); err != nil {
+	if _, err := Install(ctx, e, InstallOptions{Port: testutil.FreePort(t), NoLaunchd: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := Uninstall(ctx, e, UninstallOptions{NoLaunchd: true}); err != nil {
@@ -135,7 +136,7 @@ func TestUninstallRestoresUserFiles(t *testing.T) {
 func TestUninstallPurge(t *testing.T) {
 	e := freshHome(t)
 	ctx := context.Background()
-	if _, err := Install(ctx, e, InstallOptions{Port: freePort(t), NoLaunchd: true}); err != nil {
+	if _, err := Install(ctx, e, InstallOptions{Port: testutil.FreePort(t), NoLaunchd: true}); err != nil {
 		t.Fatal(err)
 	}
 	kc := e.Keychain.(*keychain.Memory)
@@ -187,7 +188,7 @@ func TestInstallLaunchd(t *testing.T) {
 	e := freshHome(t)
 	f := useFakeLaunchd(t)
 	ctx := context.Background()
-	if _, err := Install(ctx, e, InstallOptions{Port: freePort(t)}); err != nil {
+	if _, err := Install(ctx, e, InstallOptions{Port: testutil.FreePort(t)}); err != nil {
 		t.Fatal(err)
 	}
 	plist := launchd.PlistPath(e.Paths.Home)
@@ -231,7 +232,7 @@ func TestSkillMD(t *testing.T) {
 func TestUninstallLeavesHandEdits(t *testing.T) {
 	e := freshHome(t)
 	ctx := context.Background()
-	if _, err := Install(ctx, e, InstallOptions{Port: freePort(t), NoLaunchd: true}); err != nil {
+	if _, err := Install(ctx, e, InstallOptions{Port: testutil.FreePort(t), NoLaunchd: true}); err != nil {
 		t.Fatal(err)
 	}
 	path := e.Paths.ClaudeJSON()

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/SkyeBeFreeman/maple/internal/platform/proc"
+	"github.com/SkyeBeFreeman/maple/internal/testutil"
 )
 
 func TestCommandSetsEnvAndDir(t *testing.T) {
@@ -84,8 +85,8 @@ func TestKillGroupKillsChildren(t *testing.T) {
 	if !errors.As(err, &exitErr) || exitErr.Sys().(syscall.WaitStatus).Signal() != syscall.SIGKILL {
 		t.Fatalf("leader Wait = %v, want killed by SIGKILL", err)
 	}
-	waitGone(t, child)
-	waitGone(t, -leader) // no member of the group survived
+	testutil.WaitGone(t, child, time.Second)
+	testutil.WaitGone(t, -leader, time.Second) // no member of the group survived
 }
 
 func TestKillGroupGoneGroupIsSuccess(t *testing.T) {
@@ -107,23 +108,5 @@ func TestKillGroupRejectsReservedPIDs(t *testing.T) {
 		if err := proc.KillGroup(pid, 0); !errors.Is(err, syscall.EINVAL) {
 			t.Errorf("KillGroup(%d) = %v, want EINVAL", pid, err)
 		}
-	}
-}
-
-// waitGone fails the test unless kill(pid, 0) reports ESRCH within 1s; a
-// negative pid checks a whole process group. An exited process lingers as a
-// zombie until its parent (launchd, once orphaned) reaps it.
-func waitGone(t *testing.T, pid int) {
-	t.Helper()
-	deadline := time.Now().Add(time.Second)
-	for {
-		err := syscall.Kill(pid, 0)
-		if errors.Is(err, syscall.ESRCH) {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("kill(%d, 0) = %v after 1s, want ESRCH", pid, err)
-		}
-		time.Sleep(10 * time.Millisecond)
 	}
 }

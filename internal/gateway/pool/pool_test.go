@@ -49,7 +49,7 @@ func stdioPool(t *testing.T, opts Options, extra ...string) (*Pool, *fixture) {
 	t.Cleanup(func() {
 		p.Close()
 		for _, pid := range f.pids() {
-			waitGone(t, pid)
+			testutil.WaitGone(t, pid, 5*time.Second)
 		}
 		p.mu.Lock()
 		n := len(p.insts)
@@ -77,17 +77,6 @@ func fastOpts() Options {
 	o := DefaultOptions()
 	o.CallTimeout = 10 * time.Second
 	return o
-}
-
-func waitGone(t *testing.T, pid int) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for !errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
-		if time.Now().After(deadline) {
-			t.Fatalf("pid %d still alive", pid)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
 }
 
 func alive(pid int) bool { return syscall.Kill(pid, 0) == nil }
@@ -148,7 +137,7 @@ func TestPerSessionSeparateInstances(t *testing.T) {
 		t.Fatal("per-session PID should be 0")
 	}
 	p.EndSession("a")
-	waitGone(t, pids[0])
+	testutil.WaitGone(t, pids[0], 5*time.Second)
 	if !alive(pids[1]) {
 		t.Fatal("b killed")
 	}
@@ -159,14 +148,8 @@ func TestIdleReap(t *testing.T) {
 	o.IdleTimeout = 100 * time.Millisecond
 	p, f := stdioPool(t, o)
 	echo(t, p, "shared", "")
-	waitGone(t, f.pids()[0])
-	deadline := time.Now().Add(2 * time.Second)
-	for p.Status()["fx"].State != "idle" {
-		if time.Now().After(deadline) {
-			t.Fatalf("state %+v", p.Status()["fx"])
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	testutil.WaitGone(t, f.pids()[0], 5*time.Second)
+	testutil.Eventually(t, 2*time.Second, "fx idle", func() bool { return p.Status()["fx"].State == "idle" })
 	echo(t, p, "shared", "")
 	if n := f.starts(t); n != 2 {
 		t.Fatalf("starts=%d", n)
@@ -218,14 +201,8 @@ func TestCrashRestart(t *testing.T) {
 	if !errors.As(err, &pe) || !strings.Contains(pe.Problem, "code=3") {
 		t.Fatalf("crash err %v", err)
 	}
-	waitGone(t, f.pids()[0])
-	deadline := time.Now().Add(2 * time.Second)
-	for p.Status()["fx"].State != "stopped" {
-		if time.Now().After(deadline) {
-			t.Fatalf("state %+v", p.Status()["fx"])
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	testutil.WaitGone(t, f.pids()[0], 5*time.Second)
+	testutil.Eventually(t, 2*time.Second, "fx stopped", func() bool { return p.Status()["fx"].State == "stopped" })
 	if !strings.Contains(p.Status()["fx"].LastError, "code=3") {
 		t.Fatalf("%+v", p.Status()["fx"])
 	}
@@ -273,7 +250,7 @@ func TestListPerSessionUsesTemporaryInstance(t *testing.T) {
 	if err != nil || info == nil || len(tools) == 0 {
 		t.Fatalf("%v %v %d", err, info, len(tools))
 	}
-	waitGone(t, f.pids()[0])
+	testutil.WaitGone(t, f.pids()[0], 5*time.Second)
 	if p.Status()["fx"].State == "running" {
 		t.Fatal("still running")
 	}
@@ -288,13 +265,7 @@ func TestListPerSessionCrashCounts(t *testing.T) {
 	if !errors.As(err, &pe) || pe.Problem != "process exited (code=1)" {
 		t.Fatalf("%v", err)
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	for p.Status()["r"].State != "stopped" {
-		if time.Now().After(deadline) {
-			t.Fatalf("%+v", p.Status()["r"])
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	testutil.Eventually(t, 2*time.Second, "r stopped", func() bool { return p.Status()["r"].State == "stopped" })
 }
 
 func TestListSharedReuses(t *testing.T) {
@@ -312,10 +283,10 @@ func TestResetAndClose(t *testing.T) {
 	p, f := stdioPool(t, fastOpts())
 	echo(t, p, "shared", "")
 	p.Reset("fx")
-	waitGone(t, f.pids()[0])
+	testutil.WaitGone(t, f.pids()[0], 5*time.Second)
 	echo(t, p, "shared", "")
 	p.Close()
-	waitGone(t, f.pids()[1])
+	testutil.WaitGone(t, f.pids()[1], 5*time.Second)
 	if _, err := p.Call(context.Background(), "fx", "shared", "", &mcp.CallToolParams{Name: "echo"}); err == nil {
 		t.Fatal("call after Close succeeded")
 	}

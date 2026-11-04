@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -79,22 +80,38 @@ type Gateway struct {
 	wg       sync.WaitGroup
 	// pathEnv is written once before anything can dial.
 	pathEnv string
+	// guards holds the handlers behind the current token, rebuilt when the
+	// token changes so requests need not take mu.
+	guards atomic.Pointer[guards]
+	// port and mcpHandler are written once before the token is first
+	// loaded.
+	port       int
+	mcpHandler http.Handler
 
 	mu        sync.Mutex
 	closed    bool
 	cfg       *config.Config
 	cfgHash   string
 	reloadErr string
-	token     string
-	cache     *Cache
-	fetching  map[string]chan struct{}
-	refetch   map[string]bool
-	tools     map[string]exposed
-	logs      map[string]*redactWriter
-	logFile   io.Closer // gateway.log, nil with Options.Logger
+	// connHashes and served are derived from cfg; see setConfigLocked.
+	connHashes map[string]string
+	served     []string
+	cache      *Cache
+	// cacheSeq numbers cache snapshots; see saveCache.
+	cacheSeq uint64
+	fetching map[string]chan struct{}
+	refetch  map[string]bool
+	tools    map[string]exposed
+	logs     map[string]*redactWriter
+	logFile  io.Closer // gateway.log, nil with Options.Logger
 	// portChanged is closed once a valid config names another port.
 	portChanged   chan struct{}
 	portSignalled bool
+
+	// saveMu serializes cache writes; savedSeq is the newest snapshot
+	// written.
+	saveMu   sync.Mutex
+	savedSeq uint64
 
 	progMu   sync.Mutex
 	progSeq  uint64
@@ -109,7 +126,6 @@ func New(p config.Paths, kc keychain.Store, opts Options) *Gateway {
 		kc:       kc,
 		opts:     opts,
 		red:      NewRedactor(nil),
-		cfg:      emptyConfig(),
 		cache:    emptyCache(),
 		fetching: map[string]chan struct{}{},
 		refetch:  map[string]bool{},
@@ -119,6 +135,7 @@ func New(p config.Paths, kc keychain.Store, opts Options) *Gateway {
 
 		portChanged: make(chan struct{}),
 	}
+	g.setConfigLocked(emptyConfig())
 	g.bg, g.cancelBg = context.WithCancel(context.Background())
 	var h slog.Handler
 	if opts.Logger != nil {
@@ -156,6 +173,15 @@ func (g *Gateway) Serve(ctx context.Context, ln net.Listener) error {
 		return err
 	}
 	g.pathEnv = proc.LoginShellPath(ctx, g.opts.Shell)
+	if a, ok := ln.Addr().(*net.TCPAddr); ok {
+		g.port = a.Port
+	}
+	// The SDK's own localhost check stays on: Guard admits only loopback
+	// Host values, which that check accepts too, so it never rejects a
+	// request Guard let through.
+	g.mcpHandler = mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return g.server }, nil)
+	// Rejects everything until a token is loaded.
+	g.setToken("")
 	g.loadInitial()
 
 	stopWatch, err := g.watch()
@@ -165,17 +191,9 @@ func (g *Gateway) Serve(ctx context.Context, ln net.Listener) error {
 		stopWatch = func() {}
 	}
 
-	port := 0
-	if a, ok := ln.Addr().(*net.TCPAddr); ok {
-		port = a.Port
-	}
 	mux := http.NewServeMux()
-	// The SDK's own localhost check stays on: Guard admits only loopback
-	// Host values, which that check accepts too, so it never rejects a
-	// request Guard let through.
-	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return g.server }, nil)
-	mux.Handle("/mcp", g.guard(port, mcpHandler))
-	mux.Handle("/status", g.guard(port, http.HandlerFunc(g.serveStatus)))
+	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) { g.guards.Load().mcp.ServeHTTP(w, r) })
+	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) { g.guards.Load().status.ServeHTTP(w, r) })
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 
 	serveErr := make(chan error, 1)
@@ -213,13 +231,16 @@ func (g *Gateway) Serve(ctx context.Context, ln net.Listener) error {
 	return result
 }
 
-// guard applies Guard with the current token, which a reload may change.
-func (g *Gateway) guard(port int, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		g.mu.Lock()
-		tok := g.token
-		g.mu.Unlock()
-		Guard(port, tok, next).ServeHTTP(w, r)
+// guards are the endpoints wrapped in Guard for one token.
+type guards struct {
+	mcp, status http.Handler
+}
+
+// setToken switches every endpoint to tok.
+func (g *Gateway) setToken(tok string) {
+	g.guards.Store(&guards{
+		mcp:    Guard(g.port, tok, g.mcpHandler),
+		status: Guard(g.port, tok, http.HandlerFunc(g.serveStatus)),
 	})
 }
 

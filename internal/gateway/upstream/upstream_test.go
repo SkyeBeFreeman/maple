@@ -45,27 +45,10 @@ func callText(t *testing.T, sess Session, name string, args any) string {
 	if err != nil {
 		t.Fatalf("CallTool %s: %v", name, err)
 	}
-	if res.IsError || len(res.Content) == 0 {
+	if res.IsError {
 		t.Fatalf("CallTool %s: bad result %+v", name, res)
 	}
-	return res.Content[0].(*mcp.TextContent).Text
-}
-
-// waitGone fails unless the process (group) disappears; a lingering pid would
-// mean Close leaked a child.
-func waitGone(t *testing.T, pid int) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		err := syscall.Kill(pid, 0)
-		if errors.Is(err, syscall.ESRCH) {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("pid %d still exists: %v", pid, err)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	return testutil.Text(t, res)
 }
 
 func TestStdioDialListCall(t *testing.T) {
@@ -141,7 +124,7 @@ func TestStdioCrashReportsStderr(t *testing.T) {
 	if err := sess.Close(); err != nil {
 		t.Fatalf("Close after crash: %v", err)
 	}
-	waitGone(t, pid)
+	testutil.WaitGone(t, pid, 2*time.Second)
 }
 
 func TestStdioCloseKillsGroup(t *testing.T) {
@@ -203,7 +186,7 @@ func TestStdioDialRespectsContext(t *testing.T) {
 	if err := json.Unmarshal([]byte(strings.TrimSpace(string(b))), &pid); err != nil {
 		t.Fatal(err)
 	}
-	waitGone(t, pid)
+	testutil.WaitGone(t, pid, 2*time.Second)
 }
 
 func TestStdioProgressHook(t *testing.T) {
@@ -308,7 +291,7 @@ func TestStdioCloseDuringCall(t *testing.T) {
 	if d := time.Since(begin); d > 5*time.Second {
 		t.Fatalf("Close took %v", d)
 	}
-	waitGone(t, pid)
+	testutil.WaitGone(t, pid, 2*time.Second)
 }
 
 func TestStdioKilledBySignal(t *testing.T) {
@@ -349,7 +332,7 @@ func TestStdioCloseKillsGrandchild(t *testing.T) {
 	if d := time.Since(begin); d > 1500*time.Millisecond {
 		t.Fatalf("Close took %v", d)
 	}
-	waitGone(t, child)
+	testutil.WaitGone(t, child, 2*time.Second)
 }
 
 type failWriter struct{}

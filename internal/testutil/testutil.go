@@ -1,4 +1,4 @@
-// Package testutil provides fake MCP upstreams for tests.
+// Package testutil provides fake MCP upstreams and shared helpers for tests.
 package testutil
 
 import (

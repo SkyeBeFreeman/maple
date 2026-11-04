@@ -14,8 +14,8 @@ import (
 	"github.com/SkyeBeFreeman/maple/internal/config"
 )
 
-// clientVersion is reported to upstreams in initialize.
-const clientVersion = "0.1.0"
+// ClientVersion is reported to upstreams in initialize.
+const ClientVersion = "0.1.0"
 
 // Spec describes how to reach one upstream. All ${NAME} references are
 // already expanded; Env holds KEY=VALUE entries.
@@ -103,7 +103,7 @@ func newClient(h Hooks) *mcp.Client {
 	if h.OnLog != nil {
 		opts.LoggingMessageHandler = func(_ context.Context, r *mcp.LoggingMessageRequest) { h.OnLog(r.Params) } //nolint:staticcheck // see Hooks.OnLog
 	}
-	return mcp.NewClient(&mcp.Implementation{Name: "maple", Version: clientVersion}, opts)
+	return mcp.NewClient(&mcp.Implementation{Name: "maple", Version: ClientVersion}, opts)
 }
 
 // session holds what stdio and remote sessions share.

@@ -30,6 +30,23 @@ func TestWriteFileReplacesAtomically(t *testing.T) {
 	assertDirEntries(t, dir, "config.yaml")
 }
 
+func TestWriteFileIfDifferent(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "sub")
+	path := filepath.Join(dir, "f")
+	for i, tc := range []struct {
+		data  string
+		wrote bool
+	}{{"a", true}, {"a", false}, {"b", true}} {
+		wrote, err := atomicfile.WriteFileIfDifferent(path, []byte(tc.data), 0o600, 0o700)
+		if err != nil || wrote != tc.wrote {
+			t.Fatalf("write %d = %v, %v; want %v", i, wrote, err, tc.wrote)
+		}
+		assertContent(t, path, tc.data)
+	}
+	assertPerm(t, dir, 0o700)
+	assertPerm(t, path, 0o600)
+}
+
 func TestWriteFileCreatesMissingFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "new.json")

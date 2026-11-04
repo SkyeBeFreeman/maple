@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -45,7 +46,7 @@ type layout struct {
 }
 
 func (codexAgent) Set(data []byte, e Entry) ([]byte, error) {
-	if !entryNameRe.MatchString(e.Name) {
+	if !config.ValidName(e.Name) {
 		return nil, fmt.Errorf("invalid entry name %q", e.Name)
 	}
 	if e.URL == "" && e.Command == "" {
@@ -145,14 +146,9 @@ func (codexAgent) List(data []byte) ([]Foreign, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Decoding into a map loses file order; sorting keeps output stable.
-	names := make([]string, 0, len(servers))
-	for n := range servers {
-		names = append(names, n)
-	}
-	sort.Strings(names)
 	var out []Foreign
-	for _, n := range names {
+	// Decoding into a map loses file order; sorting keeps output stable.
+	for _, n := range slices.Sorted(maps.Keys(servers)) {
 		v, ok := servers[n].(map[string]any)
 		if !ok {
 			continue
@@ -411,67 +407,59 @@ func detachServer(doc map[string]any, name string) any {
 }
 
 func renderCodex(e Entry, nl string) ([]byte, error) {
+	// TOML documents must be valid UTF-8, so invalid input is rejected
+	// instead of written.
+	for _, v := range entryStrings(e) {
+		if !utf8.ValidString(v) {
+			return nil, fmt.Errorf("value %q is not valid UTF-8", v)
+		}
+	}
 	var lines []string
-	// entryNameRe only admits bare-key characters, so the name needs no quoting.
+	// config.ValidName only admits bare-key characters, so the name needs no quoting.
 	lines = append(lines, "["+codexServersKey+"."+e.Name+"]")
 	if e.URL != "" {
-		u, err := tomlBasicString(e.URL)
-		if err != nil {
-			return nil, err
-		}
-		lines = append(lines, "url = "+u)
+		lines = append(lines, "url = "+tomlBasicString(e.URL))
 		if len(e.Headers) > 0 {
-			keys := make([]string, 0, len(e.Headers))
-			for k := range e.Headers {
-				keys = append(keys, k)
-			}
-			sort.Strings(keys)
-			parts := make([]string, 0, len(keys))
-			for _, k := range keys {
-				v, err := tomlBasicString(e.Headers[k])
-				if err != nil {
-					return nil, err
-				}
-				kk, err := tomlKey(k)
-				if err != nil {
-					return nil, err
-				}
-				parts = append(parts, kk+" = "+v)
+			parts := make([]string, 0, len(e.Headers))
+			for _, k := range slices.Sorted(maps.Keys(e.Headers)) {
+				parts = append(parts, tomlKey(k)+" = "+tomlBasicString(e.Headers[k]))
 			}
 			lines = append(lines, "http_headers = { "+strings.Join(parts, ", ")+" }")
 		}
 	} else {
-		c, err := tomlBasicString(e.Command)
-		if err != nil {
-			return nil, err
-		}
-		lines = append(lines, "command = "+c)
+		lines = append(lines, "command = "+tomlBasicString(e.Command))
 		args := make([]string, 0, len(e.Args))
 		for _, a := range e.Args {
-			s, err := tomlBasicString(a)
-			if err != nil {
-				return nil, err
-			}
-			args = append(args, s)
+			args = append(args, tomlBasicString(a))
 		}
 		lines = append(lines, "args = ["+strings.Join(args, ", ")+"]")
 	}
 	return []byte(strings.Join(lines, nl) + nl), nil
 }
 
-func tomlKey(k string) (string, error) {
+// entryStrings lists every string of e that renderCodex writes, in the
+// order it writes them.
+func entryStrings(e Entry) []string {
+	if e.URL != "" {
+		out := []string{e.URL}
+		for _, k := range slices.Sorted(maps.Keys(e.Headers)) {
+			out = append(out, e.Headers[k], k)
+		}
+		return out
+	}
+	return append([]string{e.Command}, e.Args...)
+}
+
+func tomlKey(k string) string {
 	if bareKeyRe.MatchString(k) {
-		return k, nil
+		return k
 	}
 	return tomlBasicString(k)
 }
 
-// tomlBasicString quotes s as a TOML basic string. TOML documents must be
-// valid UTF-8, so invalid input is rejected instead of written.
-func tomlBasicString(s string) (string, error) {
-	if !utf8.ValidString(s) {
-		return "", fmt.Errorf("value %q is not valid UTF-8", s)
-	}
+// tomlBasicString quotes s, which must be valid UTF-8, as a TOML basic
+// string.
+func tomlBasicString(s string) string {
 	var b strings.Builder
 	b.WriteByte('"')
 	for _, r := range s {
@@ -499,5 +487,5 @@ func tomlBasicString(s string) (string, error) {
 		}
 	}
 	b.WriteByte('"')
-	return b.String(), nil
+	return b.String()
 }

@@ -3,6 +3,7 @@ package manage
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -17,20 +18,20 @@ import (
 	"time"
 
 	"github.com/SkyeBeFreeman/maple/internal/config"
+	"github.com/SkyeBeFreeman/maple/internal/gateway/upstream"
 	"github.com/SkyeBeFreeman/maple/internal/manage/agentconf"
 )
 
 const probeTimeout = 10 * time.Second
 
-// ImportOptions controls Import. Without Names, only an interactive caller
-// with Choose imports anything; otherwise the candidates are just listed.
-// Rename receives the default secret names keyed by "<server>.<headers|env>.<key>"
-// and returns the names to use under the same keys.
+// ImportOptions controls Import. Without Names, the candidates are only
+// listed. Rename receives the default secret names keyed by
+// "<server>.<headers|env>.<key>" and returns the names to use under the same
+// keys.
 type ImportOptions struct {
-	Names                        []string
-	RemoveOriginals, Interactive bool
-	Choose                       func([]agentconf.Foreign) []string
-	Rename                       func(defaults map[string]string) map[string]string
+	Names           []string
+	RemoveOriginals bool
+	Rename          func(defaults map[string]string) map[string]string
 }
 
 // ImportResult reports what Import found and did. SecretNames uses the same
@@ -55,7 +56,7 @@ type candidate struct {
 // Import moves the user's own MCP servers from the agents into config.yaml,
 // storing plaintext secrets in the keychain.
 func Import(ctx context.Context, e Env, o ImportOptions) (*ImportResult, error) {
-	c, _, err := load(e.Paths)
+	c, err := LoadConfig(e.Paths)
 	if err != nil {
 		return nil, err
 	}
@@ -68,14 +69,10 @@ func Import(ctx context.Context, e Env, o ImportOptions) (*ImportResult, error) 
 		res.Candidates = append(res.Candidates, cands[name].f)
 	}
 
-	selected := o.Names
-	if len(selected) == 0 {
-		if !o.Interactive || o.Choose == nil {
-			return res, nil
-		}
-		selected = o.Choose(res.Candidates)
+	if len(o.Names) == 0 {
+		return res, nil
 	}
-	for _, name := range selected {
+	for _, name := range o.Names {
 		if _, ok := cands[name]; !ok {
 			if why, ok := res.Skipped[name]; ok {
 				return res, fmt.Errorf("cannot import %q: %s", name, why)
@@ -83,7 +80,7 @@ func Import(ctx context.Context, e Env, o ImportOptions) (*ImportResult, error) 
 			return res, fmt.Errorf("server %q not found in any agent config; run: maple mcp import", name)
 		}
 	}
-	selected = slices.Compact(slices.Sorted(slices.Values(selected)))
+	selected := slices.Compact(slices.Sorted(slices.Values(o.Names)))
 
 	servers := map[string]*config.Server{}
 	for _, name := range selected {
@@ -97,13 +94,15 @@ func Import(ctx context.Context, e Env, o ImportOptions) (*ImportResult, error) 
 		}
 		servers[name] = s
 	}
-	if err := precheck(e, servers, res); err != nil {
-		return res, err
+	have, err := e.Keychain.List()
+	if err != nil {
+		return res, fmt.Errorf("list secrets: %w", err)
 	}
+	precheck(servers, have, res)
 	if len(servers) == 0 {
 		return res, nil
 	}
-	created, err := moveSecrets(e, servers, o.Rename, res)
+	created, err := moveSecrets(e, servers, have, o.Rename, res)
 	if err != nil {
 		return res, errors.Join(err, rollbackSecrets(e, created, res))
 	}
@@ -228,12 +227,9 @@ func toServer(f agentconf.Foreign) *config.Server {
 
 // precheck moves servers that config.yaml would reject into Skipped, so one
 // bad entry does not block the rest. References already in the agent's file
-// (e.g. environment variables) must exist as maple secrets.
-func precheck(e Env, servers map[string]*config.Server, res *ImportResult) error {
-	have, err := e.Keychain.List()
-	if err != nil {
-		return fmt.Errorf("list secrets: %w", err)
-	}
+// (e.g. environment variables) must exist as maple secrets; have lists the
+// secrets maple has.
+func precheck(servers map[string]*config.Server, have []string, res *ImportResult) {
 	for _, name := range slices.Sorted(maps.Keys(servers)) {
 		s := servers[name]
 		one := &config.Config{Port: config.DefaultPort, Servers: map[string]*config.Server{name: s}}
@@ -250,7 +246,6 @@ func precheck(e Env, servers map[string]*config.Server, res *ImportResult) error
 			}
 		}
 	}
-	return nil
 }
 
 func isSecret(key, value string) bool {
@@ -289,8 +284,8 @@ type secretSite struct {
 }
 
 // moveSecrets returns the keychain items it created, not reused ones, so a
-// failed import can remove them again.
-func moveSecrets(e Env, servers map[string]*config.Server, rename func(map[string]string) map[string]string, res *ImportResult) (created []string, err error) {
+// failed import can remove them again. have lists the secrets maple has.
+func moveSecrets(e Env, servers map[string]*config.Server, have []string, rename func(map[string]string) map[string]string, res *ImportResult) (created []string, err error) {
 	sites := map[string]secretSite{}
 	defaults := map[string]string{}
 	for name, s := range servers {
@@ -315,10 +310,6 @@ func moveSecrets(e Env, servers map[string]*config.Server, rename func(map[strin
 	chosen := defaults
 	if rename != nil && len(defaults) > 0 {
 		chosen = rename(maps.Clone(defaults))
-	}
-	have, err := e.Keychain.List()
-	if err != nil {
-		return nil, fmt.Errorf("list secrets: %w", err)
 	}
 	taken := map[string]string{}
 	for _, id := range slices.Sorted(maps.Keys(sites)) {
@@ -358,27 +349,28 @@ func moveSecrets(e Env, servers map[string]*config.Server, rename func(map[strin
 	return created, nil
 }
 
+// probeBody is an initialize request; any answer but an OAuth challenge
+// means the server takes the configured credentials. Marshalling these
+// literals cannot fail.
+var probeBody, _ = json.Marshal(map[string]any{
+	"jsonrpc": "2.0", "id": 1, "method": "initialize",
+	"params": map[string]any{
+		"protocolVersion": "2025-06-18",
+		"capabilities":    map[string]any{},
+		"clientInfo":      map[string]string{"name": "maple", "version": upstream.ClientVersion},
+	},
+})
+
 // probe reports whether url wants OAuth. It talks HTTP directly because the
-// SDK hides the status code; network errors are not OAuth.
+// SDK hides the status code; network errors are not OAuth. SSE servers are
+// probed with the GET that opens their stream.
 func probe(ctx context.Context, url, transport string, headers map[string]string) (bool, error) {
-	if transport == config.TransportSSE {
-		return probeOAuthSSE(ctx, url, headers)
-	}
-	return probeOAuth(ctx, url, headers)
-}
-
-func probeOAuth(ctx context.Context, url string, headers map[string]string) (bool, error) {
-	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"maple","version":"0.1.0"}}}`
-	return doProbe(ctx, http.MethodPost, url, headers, []byte(body))
-}
-
-func probeOAuthSSE(ctx context.Context, url string, headers map[string]string) (bool, error) {
-	return doProbe(ctx, http.MethodGet, url, headers, nil)
-}
-
-func doProbe(ctx context.Context, method, url string, headers map[string]string, body []byte) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
+	method, accept, body := http.MethodPost, "application/json, text/event-stream", probeBody
+	if transport == config.TransportSSE {
+		method, accept, body = http.MethodGet, "text/event-stream", nil
+	}
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
 	if err != nil {
 		return false, err
@@ -391,10 +383,8 @@ func doProbe(ctx context.Context, method, url string, headers map[string]string,
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept", "application/json, text/event-stream")
-	} else {
-		req.Header.Set("Accept", "text/event-stream")
 	}
+	req.Header.Set("Accept", accept)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return false, err

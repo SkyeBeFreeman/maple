@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/SkyeBeFreeman/maple/internal/config"
@@ -42,16 +43,46 @@ func (e Env) httpClient() *http.Client {
 	return &http.Client{Timeout: statusRequestTimeout}
 }
 
-// load reads config.yaml, turning a missing file into an actionable error.
-func load(p config.Paths) (*config.Config, []byte, error) {
-	c, raw, err := config.Load(p)
+// ReadConfig reads config.yaml without parsing it, turning a missing file
+// into an actionable error.
+func ReadConfig(p config.Paths) ([]byte, error) {
+	raw, err := os.ReadFile(p.Config())
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil, fmt.Errorf("%s does not exist; run: maple install", p.Config())
+		return nil, fmt.Errorf("%s does not exist; run: maple install", p.Config())
 	}
+	return raw, err
+}
+
+// LoadConfig is ReadConfig followed by config.Parse.
+func LoadConfig(p config.Paths) (*config.Config, error) {
+	raw, err := ReadConfig(p)
 	if err != nil {
-		return nil, raw, err
+		return nil, err
 	}
-	return c, raw, nil
+	return config.Parse(raw)
+}
+
+// Lookup returns the named server of c.
+func Lookup(c *config.Config, name string) (*config.Server, error) {
+	s, ok := c.Servers[name]
+	if !ok || s == nil {
+		return nil, fmt.Errorf("server %q not found; run: maple mcp list", name)
+	}
+	return s, nil
+}
+
+// expandServer resolves s's secret references, phrasing failures for the
+// user of the named server.
+func expandServer(e Env, name string, s *config.Server) (*config.Server, []string, error) {
+	exp, secrets, err := s.Expand(e.Keychain.Get)
+	if err != nil {
+		var se *config.SecretError
+		if errors.As(err, &se) {
+			return nil, nil, secretErr(name, se.Name, se.Err)
+		}
+		return nil, nil, fmt.Errorf("maple: %s: %w", name, err)
+	}
+	return exp, secrets, nil
 }
 
 func loadToken(p config.Paths) (string, error) {

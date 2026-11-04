@@ -14,6 +14,7 @@ import (
 
 	"github.com/SkyeBeFreeman/maple/internal/config"
 	"github.com/SkyeBeFreeman/maple/internal/platform/keychain"
+	"github.com/SkyeBeFreeman/maple/internal/testutil"
 )
 
 const (
@@ -31,23 +32,10 @@ func init() {
 // whose port has no listener, so no gateway is running by default.
 func setup(t *testing.T, configYAML string) Env {
 	t.Helper()
-	p := config.Paths{Home: t.TempDir()}
-	src := filepath.Join("agentconf", "testdata")
-	copyFile(t, filepath.Join(src, "claude", "input.json"), p.ClaudeJSON())
-	copyFile(t, filepath.Join(src, "codex", "input.toml"), p.CodexTOML())
-	copyFile(t, filepath.Join(src, "codebuddy", "input.json"), p.CodeBuddyJSON())
+	p := testutil.AgentHome(t, filepath.Join("agentconf", "testdata"))
 	writeFile(t, p.Token(), testToken+"\n")
-	writeFile(t, p.Config(), "port: "+strconv.Itoa(freePort(t))+"\n"+configYAML)
+	writeFile(t, p.Config(), "port: "+strconv.Itoa(testutil.FreePort(t))+"\n"+configYAML)
 	return Env{Paths: p, Keychain: keychain.NewMemory(), MapleBin: testBin}
-}
-
-func copyFile(t *testing.T, src, dst string) {
-	t.Helper()
-	data, err := os.ReadFile(src)
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeFile(t, dst, string(data))
 }
 
 func writeFile(t *testing.T, path, content string) {
@@ -67,18 +55,6 @@ func readFile(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return string(data)
-}
-
-// freePort returns a loopback port that nothing listens on.
-func freePort(t *testing.T) int {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	_ = ln.Close()
-	return port
 }
 
 func agentFiles(e Env) []string {

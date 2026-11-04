@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"maps"
 	"os"
 	"slices"
@@ -33,11 +32,7 @@ func loadConfig() (*config.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	c, _, err := config.Load(e.Paths)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, fmt.Errorf("%s does not exist; run: maple install", e.Paths.Config())
-	}
-	return c, err
+	return manage.LoadConfig(e.Paths)
 }
 
 type namedServer struct {
@@ -97,9 +92,9 @@ func newMCPShowCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			s, ok := c.Servers[args[0]]
-			if !ok || s == nil {
-				return fmt.Errorf("server %q not found; run: maple mcp list", args[0])
+			s, err := manage.Lookup(c, args[0])
+			if err != nil {
+				return err
 			}
 			return emit(cmd, namedServer{Name: args[0], Server: s}, func(w *strings.Builder) { printServer(w, args[0], s) })
 		},
@@ -145,6 +140,17 @@ func (f *serverFlags) register(cmd *cobra.Command) {
 	fl.StringVar(&f.mode, "mode", "", "stdio mode: shared, per-session or direct")
 	fl.StringArrayVar(&f.env, "env", nil, "environment variable K=V, repeatable; use ${NAME} for secrets; on set, K= removes K")
 	fl.StringVar(&f.description, "description", "", "description shown to the model")
+}
+
+// maps parses the repeated --header and --env flags.
+func (f *serverFlags) maps() (headers, env map[string]string, err error) {
+	if headers, err = parseKV("header", f.headers); err != nil {
+		return nil, nil, err
+	}
+	if env, err = parseKV("env", f.env); err != nil {
+		return nil, nil, err
+	}
+	return headers, env, nil
 }
 
 // parseKV turns repeated K=V flags into a map. An empty value is kept; set
@@ -214,11 +220,7 @@ func newMCPAddCmd() *cobra.Command {
 			if (f.url == "") == (len(command) == 0) {
 				return fmt.Errorf("give either --url or a command after --")
 			}
-			headers, err := parseKV("header", f.headers)
-			if err != nil {
-				return err
-			}
-			env, err := parseKV("env", f.env)
+			headers, env, err := f.maps()
 			if err != nil {
 				return err
 			}
@@ -256,11 +258,7 @@ func newMCPSetCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			headers, err := parseKV("header", f.headers)
-			if err != nil {
-				return err
-			}
-			env, err := parseKV("env", f.env)
+			headers, env, err := f.maps()
 			if err != nil {
 				return err
 			}

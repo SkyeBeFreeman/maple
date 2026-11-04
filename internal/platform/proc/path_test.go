@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/SkyeBeFreeman/maple/internal/platform/proc"
+	"github.com/SkyeBeFreeman/maple/internal/testutil"
 )
 
 // fakeLoginPrelude makes a fake shell behave like `<shell> -ilc <cmd>` whose
@@ -152,7 +153,7 @@ func TestLoginShellPathKillsHungShell(t *testing.T) {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 		}
 	})
-	waitGone(t, pid)
+	testutil.WaitGone(t, pid, time.Second)
 }
 
 func TestLookPath(t *testing.T) {

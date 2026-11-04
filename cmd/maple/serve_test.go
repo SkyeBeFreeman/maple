@@ -13,6 +13,7 @@ import (
 	"github.com/SkyeBeFreeman/maple/internal/config"
 	"github.com/SkyeBeFreeman/maple/internal/manage"
 	"github.com/SkyeBeFreeman/maple/internal/platform/keychain"
+	"github.com/SkyeBeFreeman/maple/internal/testutil"
 )
 
 func TestServeMissingConfig(t *testing.T) {
@@ -27,7 +28,7 @@ func TestServeMissingConfig(t *testing.T) {
 // in a loop): it listens on the port the file names and reports the error.
 func TestServeInvalidConfigReportsStatus(t *testing.T) {
 	e := manage.Env{Paths: config.Paths{Home: t.TempDir()}, Keychain: keychain.NewMemory()}
-	port := freePort(t)
+	port := testutil.FreePort(t)
 	if err := os.MkdirAll(e.Paths.MapleDir(), 0o700); err != nil {
 		t.Fatal(err)
 	}

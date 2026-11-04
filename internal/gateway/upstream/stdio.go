@@ -257,7 +257,8 @@ func (s *stdioSession) Close() error {
 		killGroup(s.pid)
 		<-s.done
 	})
-	return s.closeErr
+	// The process was stopped on purpose, so how it exited is not an error.
+	return nil
 }
 
 // killGroup SIGKILLs the group until it is empty or only zombies remain

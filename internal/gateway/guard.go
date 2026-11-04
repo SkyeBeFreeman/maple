@@ -4,6 +4,8 @@ import (
 	"crypto/subtle"
 	"net/http"
 	"strconv"
+
+	"github.com/SkyeBeFreeman/maple/internal/config"
 )
 
 // Guard rejects requests that are not from a local agent: a foreign Host
@@ -11,8 +13,7 @@ import (
 // wrong token (an empty token rejects all rather than accepting a bare
 // "Bearer "). Rejections carry no body so nothing internal leaks.
 func Guard(port int, token string, next http.Handler) http.Handler {
-	p := strconv.Itoa(port)
-	hosts := map[string]bool{"127.0.0.1:" + p: true, "localhost:" + p: true}
+	hosts := map[string]bool{config.LoopbackAddr(port): true, "localhost:" + strconv.Itoa(port): true}
 	want := []byte("Bearer " + token)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {

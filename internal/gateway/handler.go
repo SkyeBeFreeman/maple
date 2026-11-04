@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"strings"
@@ -33,7 +34,7 @@ func (g *Gateway) toolHandler(server, tool string) mcp.ToolHandler {
 			// Removed by a reload the agent has not caught up with yet.
 			return nil, unknownTool(req.Params.Name)
 		}
-		params := &mcp.CallToolParams{Name: tool, Meta: cloneMeta(req.Params.Meta)}
+		params := &mcp.CallToolParams{Name: tool, Meta: maps.Clone(req.Params.Meta)}
 		if len(req.Params.Arguments) > 0 {
 			params.Arguments = req.Params.Arguments
 		}
@@ -68,17 +69,6 @@ func (g *Gateway) toolHandler(server, tool string) mcp.ToolHandler {
 		g.log.Warn("tool call failed", "server", server, "tool", tool, "err", msg)
 		return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: msg}}}, nil
 	}
-}
-
-func cloneMeta(m mcp.Meta) mcp.Meta {
-	if m == nil {
-		return nil
-	}
-	out := make(mcp.Meta, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
-	return out
 }
 
 // dial is the pool's Dialer: it expands the server's secrets from the

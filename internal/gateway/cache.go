@@ -1,8 +1,9 @@
 package gateway
 
 import (
-	"bytes"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -71,11 +72,15 @@ func (c *Cache) Save(p config.Paths) error {
 		return err
 	}
 	data = append(data, '\n')
-	if old, err := os.ReadFile(p.Cache()); err == nil && bytes.Equal(old, data) {
-		return nil
+	_, err = atomicfile.WriteFileIfDifferent(p.Cache(), data, 0o600, 0o700)
+	var pe *fs.PathError
+	if errors.As(err, &pe) && pe.Op == "open" {
+		// An unreadable cache.json (e.g. left root-owned by a sudo run) must
+		// not stop the gateway from persisting tools: replacing it via rename
+		// only needs write access to the directory, so rewrite it.
+		if err = os.MkdirAll(filepath.Dir(p.Cache()), 0o700); err == nil {
+			err = atomicfile.WriteFile(p.Cache(), data, 0o600)
+		}
 	}
-	if err := os.MkdirAll(filepath.Dir(p.Cache()), 0o700); err != nil {
-		return err
-	}
-	return atomicfile.WriteFile(p.Cache(), data, 0o600)
+	return err
 }

@@ -31,8 +31,8 @@ func TestToolName(t *testing.T) {
 		t.Fatal("suffixed names exceed 64")
 	}
 
-	if got := ToolName("a b", "c", nil); got != "a-b__c" {
-		t.Fatalf("nil taken: got %q", got)
+	if got := ToolName("a b", "c", map[string]bool{}); got != "a-b__c" {
+		t.Fatalf("empty taken: got %q", got)
 	}
 
 	// A short colliding name keeps its full base.

@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
+	"slices"
 	"sync"
 
 	"github.com/SkyeBeFreeman/maple/internal/platform/atomicfile"
@@ -104,5 +106,5 @@ func (f *fileStore) List() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return sortedKeys(m), nil
+	return slices.Sorted(maps.Keys(m)), nil
 }

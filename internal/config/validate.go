@@ -2,8 +2,9 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"regexp"
-	"sort"
+	"slices"
 )
 
 // ValidationError is a problem in config.yaml. Line is 0 when the Config was
@@ -29,27 +30,22 @@ func (e *ValidationError) Error() string {
 // limit.
 var serverNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
 
-// reservedName is the gateway's own entry in the agents' configs; a direct
-// server with this name would collide with it.
-const reservedName = "maple"
+// ValidName reports whether name has the shape of a server or agent entry
+// name. Unlike IsServerName it accepts GatewayName.
+func ValidName(name string) bool { return serverNameRe.MatchString(name) }
 
 // IsServerName reports whether name is allowed as a server name.
-func IsServerName(name string) bool { return serverNameRe.MatchString(name) && name != reservedName }
+func IsServerName(name string) bool { return ValidName(name) && name != GatewayName }
 
 // Validate checks the rules of spec 6.2 and returns the first violation as a
 // *ValidationError.
 func (c *Config) Validate() error { return validate(c, nil) }
 
 func validate(c *Config, idx *nodeIndex) error {
-	if c.Port < 1 || c.Port > 65535 {
+	if !validPort(c.Port) {
 		return &ValidationError{Line: idx.portLine(), Msg: fmt.Sprintf("port %d: must be 1-65535", c.Port)}
 	}
-	names := make([]string, 0, len(c.Servers))
-	for n := range c.Servers {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	for _, name := range names {
+	for _, name := range slices.Sorted(maps.Keys(c.Servers)) {
 		if err := validateServer(name, c.Servers[name], idx); err != nil {
 			return err
 		}
@@ -61,11 +57,11 @@ func validateServer(name string, s *Server, idx *nodeIndex) error {
 	fail := func(line int, format string, a ...any) error {
 		return &ValidationError{Line: line, Server: name, Msg: fmt.Sprintf(format, a...)}
 	}
-	if !serverNameRe.MatchString(name) {
+	if !ValidName(name) {
 		return fail(idx.serverLine(name), "invalid server name: use 1-32 characters from A-Z a-z 0-9 _ -")
 	}
-	if name == reservedName {
-		return fail(idx.serverLine(name), "server name %q is reserved; choose another name", reservedName)
+	if name == GatewayName {
+		return fail(idx.serverLine(name), "server name %q is reserved; choose another name", GatewayName)
 	}
 	if s == nil {
 		s = &Server{}
@@ -108,24 +104,15 @@ func validateServer(name string, s *Server, idx *nodeIndex) error {
 			return fail(idx.itemLine(name, "args", i), "args[%d]: %v", i, err)
 		}
 	}
-	for _, k := range sortedKeys(s.Headers) {
+	for _, k := range slices.Sorted(maps.Keys(s.Headers)) {
 		if _, err := Refs(s.Headers[k]); err != nil {
 			return fail(idx.mapEntryLine(name, "headers", k), "headers.%s: %v", k, err)
 		}
 	}
-	for _, k := range sortedKeys(s.Env) {
+	for _, k := range slices.Sorted(maps.Keys(s.Env)) {
 		if _, err := Refs(s.Env[k]); err != nil {
 			return fail(idx.mapEntryLine(name, "env", k), "env.%s: %v", k, err)
 		}
 	}
 	return nil
-}
-
-func sortedKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }
