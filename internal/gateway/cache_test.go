@@ -125,11 +125,9 @@ func TestSaveCacheKeepsNewestSnapshot(t *testing.T) {
 	// Concurrent saves end with the highest sequence number on disk.
 	var wg sync.WaitGroup
 	for i := uint64(3); i <= 20; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			g.saveCache(snap(strconv.FormatUint(i, 10)), i)
-		}()
+		})
 	}
 	wg.Wait()
 	if got := LoadCache(p).Servers["a"].Hash; got != "20" {

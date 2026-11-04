@@ -280,11 +280,9 @@ func (p *Pool) watch(inst *instance) {
 // closeLater closes outside p.mu because Close can take seconds. Caller
 // holds p.mu.
 func (p *Pool) closeLater(sess upstream.Session) {
-	p.wg.Add(1)
-	go func() {
-		defer p.wg.Done()
+	p.wg.Go(func() {
 		_ = sess.Close()
-	}()
+	})
 }
 
 // drop removes inst on purpose and returns its session (nil while still
@@ -501,11 +499,9 @@ func (p *Pool) closeMatching(match func(*instance) bool) {
 	p.mu.Unlock()
 	var wg sync.WaitGroup
 	for _, s := range sessions {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_ = s.Close()
-		}()
+		})
 	}
 	wg.Wait()
 }

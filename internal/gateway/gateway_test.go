@@ -83,8 +83,11 @@ func testOptions() Options {
 	o := DefaultOptions()
 	o.Pool.CallTimeout = 10 * time.Second
 	o.Pool.IdleTimeout = time.Minute
-	o.ListWait = 5 * time.Second
-	o.InitWait = 5 * time.Second
+	// Generous: a fakemcp's first start under a fully parallel -race run (or a
+	// slow CI runner) can exceed 5s, and initialize would then answer without
+	// instructions by design.
+	o.ListWait = 20 * time.Second
+	o.InitWait = 20 * time.Second
 	o.Debounce = 20 * time.Millisecond
 	o.Shell = ""
 	o.Version = "test"
@@ -156,7 +159,7 @@ func (e *env) pids() []int {
 		return nil
 	}
 	var out []int
-	for _, f := range strings.Fields(string(b)) {
+	for f := range strings.FieldsSeq(string(b)) {
 		if n, err := strconv.Atoi(f); err == nil {
 			out = append(out, n)
 		}

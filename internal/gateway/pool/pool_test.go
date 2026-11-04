@@ -112,8 +112,7 @@ func TestSharedSingleInstance(t *testing.T) {
 	p, f := stdioPool(t, fastOpts())
 	var wg sync.WaitGroup
 	for _, sid := range []string{"a", "b"} {
-		wg.Add(1)
-		go func() { defer wg.Done(); echo(t, p, "shared", sid) }()
+		wg.Go(func() { ; echo(t, p, "shared", sid) })
 	}
 	wg.Wait()
 	if n := f.starts(t); n != 1 {
@@ -221,7 +220,7 @@ func TestCrashLoopCooldown(t *testing.T) {
 		_, err := p.Call(context.Background(), "fx", "shared", "", &mcp.CallToolParams{Name: "echo", Arguments: map[string]any{"text": "x"}})
 		return err
 	}
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if call() == nil {
 			t.Fatal("expected dial error")
 		}
@@ -492,11 +491,9 @@ func TestConcurrentDialErrorCountsOnce(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make([]error, 3)
 	for i := range errs {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_, errs[i] = p.Call(context.Background(), "r", "", "", &mcp.CallToolParams{Name: "t"})
-		}()
+		})
 	}
 	for d.count() == 0 {
 		time.Sleep(time.Millisecond)

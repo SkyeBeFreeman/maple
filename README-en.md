@@ -16,7 +16,7 @@ maple is a local MCP gateway for coding agents. It manages your MCP server confi
 
 ## Installation
 
-Requires macOS and Go 1.25 or later.
+Requires macOS and Go 1.26 or later.
 
 ```bash
 go install github.com/SkyeBeFreeman/maple/cmd/maple@latest
