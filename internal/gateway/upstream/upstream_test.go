@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -384,5 +385,104 @@ func TestListToolsFollowsCursor(t *testing.T) {
 	}
 	if len(tools) != 5 {
 		t.Fatalf("got %d tools, want 5", len(tools))
+	}
+}
+
+// Some gateways hold the standalone SSE GET for minutes; the SDK waits for
+// its headers inside Connect, outside ctx, so Dial must not open it at all.
+func TestRemoteSkipsStandaloneSSE(t *testing.T) {
+	ts := testutil.HTTPServer(t, config.TransportHTTP, [2]string{}, testutil.FakeOptions{HoldStandaloneGET: true})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	type result struct {
+		sess Session
+		err  error
+	}
+	got := make(chan result, 1)
+	begin := time.Now()
+	go func() {
+		sess, err := Dial(ctx, Spec{Name: "held", URL: ts.URL, Transport: config.TransportHTTP}, Hooks{})
+		got <- result{sess, err}
+	}()
+	var r result
+	select {
+	case r = <-got:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Dial still running after 5s")
+	}
+	if r.err != nil {
+		t.Fatalf("Dial: %v", r.err)
+	}
+	t.Cleanup(func() { _ = r.sess.Close() })
+	if d := time.Since(begin); d > 2*time.Second {
+		t.Fatalf("Dial took %v", d)
+	}
+	tools, err := r.sess.ListTools(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools) != 4 {
+		t.Fatalf("got %d tools, want 4", len(tools))
+	}
+}
+
+func TestRemoteDialHonoursContext(t *testing.T) {
+	for _, tr := range []string{config.TransportHTTP, config.TransportSSE} {
+		t.Run(tr, func(t *testing.T) {
+			ts := testutil.HTTPServer(t, tr, [2]string{}, testutil.FakeOptions{HoldInitialize: true})
+			ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+			defer cancel()
+			begin := time.Now()
+			sess, err := Dial(ctx, Spec{Name: "held", URL: ts.URL, Transport: tr}, Hooks{})
+			if err == nil {
+				_ = sess.Close()
+				t.Fatal("Dial succeeded")
+			}
+			if d := time.Since(begin); d > time.Second {
+				t.Fatalf("Dial took %v", d)
+			}
+			if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), ts.URL) {
+				t.Fatalf("Dial err = %v, want deadline exceeded naming %s", err, ts.URL)
+			}
+		})
+	}
+}
+
+// A connect that ignores ctx must not hold Dial, and the session it yields
+// after Dial gave up must be released rather than leaked.
+func TestConnectWithinReleasesLateSession(t *testing.T) {
+	gate := make(chan struct{})
+	var once sync.Once
+	open := func() { once.Do(func() { close(gate) }) }
+	t.Cleanup(open)
+	// A stand-in: connectWithin only hands it over, never uses it.
+	late := new(mcp.ClientSession)
+	released := make(chan *mcp.ClientSession, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	errc := make(chan error, 1)
+	go func() {
+		_, err := connectWithin(ctx, func() (*mcp.ClientSession, error) {
+			<-gate
+			return late, nil
+		}, func(cs *mcp.ClientSession) { released <- cs })
+		errc <- err
+	}()
+	select {
+	case err := <-errc:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("err = %v, want deadline exceeded", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("connectWithin waited for connect past ctx")
+	}
+	open()
+	select {
+	case cs := <-released:
+		if cs != late {
+			t.Fatalf("released %p, want the late session %p", cs, late)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("late session not released")
 	}
 }

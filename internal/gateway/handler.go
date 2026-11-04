@@ -94,6 +94,7 @@ func (g *Gateway) dial(ctx context.Context, name string) (upstream.Session, erro
 	if err != nil {
 		return nil, g.dialError(name, s, err)
 	}
+	g.connected(name)
 	return sess, nil
 }
 
@@ -130,7 +131,12 @@ func (g *Gateway) dialError(name string, s *config.Server, err error) error {
 	// wording; the innermost url.Error is what tells the user something.
 	reason := msg
 	var ue *url.Error
-	if errors.As(err, &ue) {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		// The bounded connect returns a bare deadline error that already
+		// carries the URL, so the generic message would name it twice.
+		reason = "no answer within the connect timeout"
+	case errors.As(err, &ue):
 		reason = g.red.Redact(ue.Err.Error())
 	}
 	return &pool.Error{Server: name, Problem: "cannot reach " + s.URL + ": " + reason}

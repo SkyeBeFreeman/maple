@@ -272,6 +272,41 @@ func (g *Gateway) toolsChanged(name string) {
 	g.fetchLocked(name)
 }
 
+// connected relists a server once a new connection to it is up, which is
+// how the gateway learns of tools an upstream adds without announcing them,
+// as remote ones cannot with their standalone SSE stream off. The decision
+// is made before dial returns and only the listing runs in the background:
+// decided later, a connection made by a listing could find that listing
+// already done and relist once more.
+func (g *Gateway) connected(name string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.relistDueLocked(name) {
+		g.fetchLocked(name)
+	}
+}
+
+// relistDueLocked reports whether a new connection to name calls for a
+// relist. Caller holds g.mu.
+func (g *Gateway) relistDueLocked(name string) bool {
+	// A per-session server connects once per agent session, and its lists
+	// come from a throwaway instance that would connect again.
+	if s := g.cfg.Servers[name]; s == nil || s.EffectiveMode() == config.ModePerSession {
+		return false
+	}
+	// A listing under way most likely made this connection. If it instead
+	// fails on an instance that died meanwhile, the new instance's tools
+	// wait for the next reconnect: dial cannot tell who asked for it.
+	if g.fetching[name] != nil {
+		return false
+	}
+	// Without an entry the first listing is under way or about to be.
+	cs, ok := g.cachedLocked(name)
+	// RelistAfter keeps reconnect loops (crashes, expired remote sessions)
+	// from relisting every time.
+	return ok && time.Since(cs.UpdatedAt) >= g.opts.RelistAfter
+}
+
 // waitFetches waits up to d for servers still being listed; what does not
 // finish in time is simply left out of this answer.
 func (g *Gateway) waitFetches(ctx context.Context, d time.Duration) {

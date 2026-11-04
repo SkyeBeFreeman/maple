@@ -2,6 +2,10 @@
 package testutil
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,6 +23,14 @@ import (
 type FakeOptions struct {
 	Name, Instructions, Description string
 	Extra                           int
+	// HoldStandaloneGET leaves every GET without response headers until the
+	// request ends, like gateways that hold the standalone SSE stream. It
+	// also rejects server/discover as pre-2026-07-28 servers do: only the
+	// legacy handshake opens that stream. "http" only.
+	HoldStandaloneGET bool
+	// HoldInitialize never answers the handshake, i.e. initialize and the
+	// server/discover that newer clients send first.
+	HoldInitialize bool
 }
 
 var (
@@ -63,15 +75,65 @@ func HTTPServer(t testing.TB, transport string, wantHeader [2]string, opts FakeO
 	default:
 		t.Fatalf("HTTPServer: unknown transport %q", transport)
 	}
+	if opts.HoldStandaloneGET && transport != "http" {
+		t.Fatalf("HTTPServer: HoldStandaloneGET needs transport http, not %q", transport)
+	}
+	// release ends held requests before ts.Close, which would otherwise wait
+	// for them forever when a client never gives up.
+	release := make(chan struct{})
+	hold := func(r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if wantHeader[0] != "" && r.Header.Get(wantHeader[0]) != wantHeader[1] {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
+		if opts.HoldStandaloneGET && r.Method == http.MethodGet {
+			hold(r)
+			return
+		}
+		if (opts.HoldStandaloneGET || opts.HoldInitialize) && r.Method == http.MethodPost {
+			id, method, ok := peekCall(r)
+			if !ok {
+				http.Error(w, "cannot read body", http.StatusBadRequest)
+				return
+			}
+			switch {
+			case opts.HoldInitialize && (method == "initialize" || method == "server/discover"):
+				hold(r)
+				return
+			case opts.HoldStandaloneGET && method == "server/discover":
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"error":{"code":-32601,"message":"method not found"}}`, id)
+				return
+			}
+		}
 		h.ServeHTTP(w, r)
 	}))
 	t.Cleanup(ts.Close)
+	t.Cleanup(func() { close(release) })
 	return ts
+}
+
+// peekCall returns the id and method of a single JSON-RPC message in r's
+// body and leaves the body readable for the real handler.
+func peekCall(r *http.Request) (id json.RawMessage, method string, ok bool) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return nil, "", false
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	var msg struct {
+		ID     json.RawMessage `json:"id"`
+		Method string          `json:"method"`
+	}
+	// Anything else (a batch, a response) is passed on untouched.
+	_ = json.Unmarshal(body, &msg)
+	return msg.ID, msg.Method, true
 }
 
 // OAuthServer answers every request with an OAuth protected-resource challenge.

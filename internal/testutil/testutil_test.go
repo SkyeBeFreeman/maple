@@ -218,3 +218,98 @@ func (s *syncBuf) String() string {
 	defer s.mu.Unlock()
 	return s.b.String()
 }
+
+func TestFakeMCPExtraFile(t *testing.T) {
+	bin := BuildFakeMCP(t)
+	file := filepath.Join(t.TempDir(), "extra")
+	count := func() int {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		sess, err := newClient().Connect(ctx, &mcp.CommandTransport{Command: exec.Command(bin, "-extra", "5", "-extra-file", file)}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = sess.Close() }()
+		lt, err := sess.ListTools(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(lt.Tools)
+	}
+	if n := count(); n != 4 {
+		t.Fatalf("missing file: %d tools, want 4", n)
+	}
+	if err := os.WriteFile(file, []byte("2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(); n != 6 {
+		t.Fatalf("file with 2: %d tools, want 6", n)
+	}
+}
+
+// post sends one JSON-RPC message the way the SDK client does.
+func post(ctx context.Context, url, body string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	return http.DefaultClient.Do(req)
+}
+
+func TestHTTPServerHolds(t *testing.T) {
+	const discover = `{"jsonrpc":"2.0","id":7,"method":"server/discover","params":{}}`
+	const initialize = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}`
+	held := func(t *testing.T, do func(ctx context.Context) (*http.Response, error)) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		defer cancel()
+		resp, err := do(ctx)
+		if err == nil {
+			_ = resp.Body.Close()
+			t.Fatalf("answered with %d, want held", resp.StatusCode)
+		}
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("err = %v, want deadline exceeded", err)
+		}
+	}
+
+	t.Run("standalone GET", func(t *testing.T) {
+		srv := HTTPServer(t, "http", [2]string{}, FakeOptions{HoldStandaloneGET: true})
+		held(t, func(ctx context.Context) (*http.Response, error) {
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+			if err != nil {
+				return nil, err
+			}
+			req.Header.Set("Accept", "text/event-stream")
+			return http.DefaultClient.Do(req)
+		})
+		// Rejecting discover is what sends the client down the legacy path.
+		resp, err := post(context.Background(), srv.URL, discover)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		var got struct {
+			ID    int `json:"id"`
+			Error struct {
+				Code int `json:"code"`
+			} `json:"error"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusOK || got.ID != 7 || got.Error.Code != -32601 {
+			t.Fatalf("discover = %d %+v, want 200 with method not found for id 7", resp.StatusCode, got)
+		}
+	})
+
+	t.Run("initialize", func(t *testing.T) {
+		srv := HTTPServer(t, "http", [2]string{}, FakeOptions{HoldInitialize: true})
+		for _, body := range []string{discover, initialize} {
+			held(t, func(ctx context.Context) (*http.Response, error) { return post(ctx, srv.URL, body) })
+		}
+	})
+}

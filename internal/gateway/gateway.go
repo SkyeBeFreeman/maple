@@ -37,7 +37,10 @@ type Options struct {
 	// InitWait how long initialize waits for servers without a cache entry,
 	// Debounce how long config changes settle before a reload.
 	ListWait, InitWait, Debounce time.Duration
-	Version                      string
+	// RelistAfter is how old a server's cached tools must be for a new
+	// connection to it to relist them.
+	RelistAfter time.Duration
+	Version     string
 	// Shell is the login shell whose PATH stdio servers get.
 	Shell string
 	// Logger replaces the gateway.log logger, e.g. in tests. Records still
@@ -53,14 +56,16 @@ type Options struct {
 // than Options.Port. The caller exits so launchd restarts it on that port.
 var ErrPortChanged = errors.New("config.yaml names a new port; restarting the gateway on it")
 
-// DefaultOptions returns the spec values: 40s list wait, 5s initialize wait
-// and a 200ms debounce. Version, Shell and Port are left to the caller.
+// DefaultOptions returns the spec values: 40s list wait, 5s initialize wait,
+// a 200ms debounce and relisting on connect once the cache is a minute old.
+// Version, Shell and Port are left to the caller.
 func DefaultOptions() Options {
 	return Options{
-		Pool:     pool.DefaultOptions(),
-		ListWait: 40 * time.Second,
-		InitWait: 5 * time.Second,
-		Debounce: 200 * time.Millisecond,
+		Pool:        pool.DefaultOptions(),
+		ListWait:    40 * time.Second,
+		InitWait:    5 * time.Second,
+		Debounce:    200 * time.Millisecond,
+		RelistAfter: time.Minute,
 	}
 }
 

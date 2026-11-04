@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -637,6 +640,124 @@ func TestPortChangeStopsServe(t *testing.T) {
 	for _, pid := range e.pids() {
 		if !testutil.Gone(pid, 5*time.Second) {
 			t.Errorf("pid %d still alive", pid)
+		}
+	}
+}
+
+// cachedAt is when cache.json says name was last listed.
+func (e *env) cachedAt(name string) time.Time {
+	e.t.Helper()
+	cs, ok := LoadCache(e.paths).Servers[name]
+	if !ok {
+		e.t.Fatalf("%s not in cache.json", name)
+	}
+	return cs.UpdatedAt
+}
+
+// An upstream that never announces tool changes, as remote ones cannot with
+// their standalone SSE stream off, is relisted once it reconnects.
+func TestRelistOnReconnect(t *testing.T) {
+	e := newEnv(t)
+	extra := filepath.Join(e.paths.Home, "extra")
+	setExtra := func(n int) {
+		t.Helper()
+		if err := os.WriteFile(extra, []byte(strconv.Itoa(n)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setExtra(1)
+	e.writeConfig("servers:\n  fake:\n" + e.fake(fmt.Sprintf(", %q, %q", "-extra-file", extra), ""))
+	opts := testOptions()
+	// Long enough that the relist reuses the instance the call started,
+	// short enough to wait for its reaping.
+	opts.Pool.IdleTimeout = 300 * time.Millisecond
+	opts.RelistAfter = time.Millisecond
+	e.startOn(listen(t), opts)
+	changed := make(chan struct{}, 16)
+	cs := e.connect(&mcp.ClientOptions{
+		ToolListChangedHandler: func(context.Context, *mcp.ToolListChangedRequest) {
+			select {
+			case changed <- struct{}{}:
+			default:
+			}
+		},
+	})
+	if tools := toolNames(t, cs); tools["fake__t0"] == nil || tools["fake__t1"] != nil {
+		t.Fatalf("tools = %v, want t0 and no t1", slices.Sorted(maps.Keys(tools)))
+	}
+	listedAt := e.cachedAt("fake")
+	pids := e.pids()
+	if len(pids) != 1 {
+		t.Fatalf("starts = %d, want 1", len(pids))
+	}
+
+	setExtra(3)
+	testutil.WaitGone(t, pids[0], 5*time.Second)
+	// The first listing's own connection must not have relisted.
+	if at := e.cachedAt("fake"); !at.Equal(listedAt) {
+		t.Fatalf("cache rewritten at %v after the listing at %v", at, listedAt)
+	}
+	for len(changed) > 0 {
+		<-changed
+	}
+
+	res, err := call(t, cs, "fake__echo", map[string]any{"text": "hi"})
+	if err != nil || res.IsError || testutil.Text(t, res) != "hi" {
+		t.Fatalf("echo: %v %+v", err, res)
+	}
+	select {
+	case <-changed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no tools/list_changed after the reconnect")
+	}
+	testutil.Eventually(t, 5*time.Second, "fake__t2", func() bool { return toolNames(t, cs)["fake__t2"] != nil })
+	if n := len(e.pids()); n != 2 {
+		t.Fatalf("starts = %d, want 2", n)
+	}
+}
+
+// Every rule of relisting on connect; TestRelistOnReconnect covers the one
+// case that relists end to end.
+func TestDialErrorTimeoutNamesURLOnce(t *testing.T) {
+	g := New(config.Paths{Home: t.TempDir()}, nil, Options{Logger: slog.New(slog.DiscardHandler)})
+	t.Cleanup(g.cancelBg)
+	s := &config.Server{URL: "http://127.0.0.1:1/mcp"}
+	err := g.dialError("slow", s, fmt.Errorf("connect %s: %w", s.URL, context.DeadlineExceeded))
+	want := "maple: slow: cannot reach http://127.0.0.1:1/mcp: no answer within the connect timeout"
+	if err.Error() != want {
+		t.Fatalf("dialError = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestRelistDue(t *testing.T) {
+	g := New(config.Paths{Home: t.TempDir()}, nil, Options{Logger: slog.New(slog.DiscardHandler), RelistAfter: time.Minute})
+	t.Cleanup(g.cancelBg)
+	cfg, err := config.Parse([]byte("servers:\n" +
+		"  stale:\n    url: http://127.0.0.1:1/a\n" +
+		"  fresh:\n    url: http://127.0.0.1:1/b\n" +
+		"  busy:\n    url: http://127.0.0.1:1/c\n" +
+		"  uncached:\n    url: http://127.0.0.1:1/d\n" +
+		"  edited:\n    url: http://127.0.0.1:1/e\n" +
+		"  local:\n    command: fakemcp\n" +
+		"  per:\n    command: fakemcp\n    mode: per-session\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.setConfigLocked(cfg)
+	old := time.Now().Add(-time.Hour)
+	for name, at := range map[string]time.Time{"stale": old, "fresh": time.Now(), "busy": old, "local": old, "per": old} {
+		g.cache.Servers[name] = CachedServer{Hash: g.connHashes[name], UpdatedAt: at}
+	}
+	g.cache.Servers["edited"] = CachedServer{Hash: "listed under an older config", UpdatedAt: old}
+	g.fetching["busy"] = make(chan struct{})
+	for name, want := range map[string]bool{
+		"stale": true, "local": true,
+		"fresh": false, "busy": false, "uncached": false, "edited": false, "per": false, "unknown": false,
+	} {
+		if got := g.relistDueLocked(name); got != want {
+			t.Errorf("%s: relist = %v, want %v", name, got, want)
 		}
 	}
 }

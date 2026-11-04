@@ -71,13 +71,22 @@ func dialRemote(ctx context.Context, s Spec, h Hooks) (Session, error) {
 		sse = &sseTransport{SSEClientTransport: mcp.SSEClientTransport{Endpoint: s.URL, HTTPClient: hc}}
 		t = sse
 	} else {
-		t = &mcp.StreamableClientTransport{Endpoint: s.URL, HTTPClient: hc}
+		// No standalone SSE GET: the SDK waits for its response headers
+		// inside Connect, outside ctx, and some gateways hold them for
+		// minutes. Its only loss, unannounced tool changes, is made up for by
+		// relisting on reconnect in the gateway.
+		t = &mcp.StreamableClientTransport{Endpoint: s.URL, HTTPClient: hc, DisableStandaloneSSE: true}
 	}
-	cs, err := newClient(h).Connect(ctx, t, nil)
-	if err != nil {
+	release := func(cs *mcp.ClientSession) {
+		if cs != nil {
+			_ = cs.Close()
+		}
 		if sse != nil {
 			sse.close()
 		}
+	}
+	cs, err := connectWithin(ctx, func() (*mcp.ClientSession, error) { return newClient(h).Connect(ctx, t, nil) }, release)
+	if err != nil {
 		return nil, fmt.Errorf("connect %s: %w", s.URL, err)
 	}
 	rs := &remoteSession{session: newSession(cs), sse: sse}
@@ -91,6 +100,40 @@ func dialRemote(ctx context.Context, s Spec, h Hooks) (Session, error) {
 		return fmt.Errorf("connection to %s lost: %w", s.URL, err)
 	})
 	return rs, nil
+}
+
+// connectWithin returns by the time ctx ends even if connect does not: the
+// SDK has had handshake paths that ignore ctx, and a stuck Dial would hold a
+// pool start for the whole call timeout. release gets the session of a
+// failed connect (nil) or of one that finished after Dial gave up.
+func connectWithin(ctx context.Context, connect func() (*mcp.ClientSession, error), release func(*mcp.ClientSession)) (*mcp.ClientSession, error) {
+	type result struct {
+		cs  *mcp.ClientSession
+		err error
+	}
+	// Unbuffered, so that exactly one side owns the outcome: either Dial
+	// receives it, or the goroutine sees abandoned and releases it.
+	done := make(chan result)
+	abandoned := make(chan struct{})
+	go func() {
+		cs, err := connect()
+		select {
+		case done <- result{cs, err}:
+		case <-abandoned:
+			release(cs)
+		}
+	}()
+	select {
+	case r := <-done:
+		if r.err != nil {
+			release(r.cs)
+			return nil, r.err
+		}
+		return r.cs, nil
+	case <-ctx.Done():
+		close(abandoned)
+		return nil, ctx.Err()
+	}
 }
 
 func (s *remoteSession) PID() int { return 0 }
