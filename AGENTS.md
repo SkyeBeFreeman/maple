@@ -95,9 +95,10 @@ MAPLE_TEST_LAUNCHD=1 go test ./internal/platform/launchd/ -run LoadUnload   # �
 
 - `go build ./...` 与 `go test -race ./...` 通过
 - `./.bin/golangci-lint fmt` 之后 `./.bin/golangci-lint run` 无新增问题
-- `go mod tidy -diff` 无输出
+- `go mod tidy -diff` 与 `go fix -diff ./...` 无输出
 - 改动用户可见的行为时，`README.md` 与 `README-en.md` 已同步
 - diff 里没有本机路径、内部域名或密钥
+- 推送后 GitHub Actions 的 CI（`.github/workflows/ci.yml`：lint、macOS 上的 `-race` 测试、govulncheck）全部通过
 
 ## Git 提交规范
 
