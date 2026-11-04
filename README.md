@@ -16,7 +16,7 @@ maple 是面向编码 agent 的本机 MCP 网关：统一管理 MCP server 的�
 
 ## 安装
 
-需要 macOS 和 Go 1.25 及以上版本。maple 通过 cgo 访问钥匙串，构建时需要 C 编译器（Xcode Command Line Tools）。
+需要 macOS 和 Go 1.25 及以上版本。
 
 ```bash
 go install github.com/SkyeBeFreeman/maple/cmd/maple@latest

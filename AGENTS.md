@@ -55,7 +55,7 @@ LICENSE
 
 ## 构建与测试
 
-只支持 macOS。构建需要 cgo（Keychain 通过 cgo 调用 Security 框架），保持 `CGO_ENABLED=1`（默认值）并装好 Xcode Command Line Tools。
+只支持 macOS。钥匙串通过系统自带的 `/usr/bin/security` 访问，不依赖 cgo，`CGO_ENABLED=0` 也能构建。
 
 golangci-lint 用 v2.11.4，装在仓库内的 `.bin/`（已 gitignore），不替换全局版本：
 
